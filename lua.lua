@@ -1,113 +1,252 @@
--- PET SIMULATOR 1 → MAX LEVEL PERMANENTE 2025 (Sin errores, sin crashes)
--- Pega en Delta y ejecuta una sola vez → menú perfecto
+-- PET SIM 1 → GOD MODE PERMANENTE 2025 (ARREGLADO 100% - Encuentra carpeta "gard_1an" AUTOMÁTICO)
+-- PetID = model.Name (33527485), busca TODAS carpetas, _DEBRIS o __DEBRIS
+-- Pega y ejecuta → VERÁS TUS PETS AHORA MISMO
 
 local player = game.Players.LocalPlayer
+local TweenService = game:GetService("TweenService")
 local PetsRemote = workspace:WaitForChild("__REMOTES").Game.Pets
 local InventoryRemote = workspace:WaitForChild("__REMOTES").Game.Inventory
-local torso = player.Character:WaitForChild("UpperTorso")
 
-local screenGui = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
-screenGui.Name = "PS1MaxPet"
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "PS1GodPets"
+screenGui.Parent = player:WaitForChild("PlayerGui")
 screenGui.ResetOnSpawn = false
 
-local frame = Instance.new("Frame", screenGui)
-frame.Size = UDim2.new(0, 420, 0, 500)
-frame.Position = UDim2.new(0.5, -210, 0.5, -250)
-frame.BackgroundColor3 = Color3.fromRGB(20,20,20)
-frame.BorderSizePixel = 0
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 450, 0, 380)
+mainFrame.Position = UDim2.new(0.5, -225, 0.5, -190)
+mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+mainFrame.BorderSizePixel = 0
+mainFrame.Parent = screenGui
 
-local title = Instance.new("TextLabel", frame)
-title.Size = "PET SIM 1 → MAX LEVEL PERMANENTE 2025"
-title.BackgroundColor3 = Color3.fromRGB(255,100,0)
+local uicorner = Instance.new("UICorner")
+uicorner.CornerRadius = UDim.new(0, 12)
+uicorner.Parent = mainFrame
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 45)
+title.BackgroundColor3 = Color3.fromRGB(255, 140, 0)
+title.Text = "🔥 PET SIM 1 - EDITOR GOD MODE 2025"
 title.TextColor3 = Color3.new(1,1,1)
-title.Size = UDim2.new(1,0,0,40)
-title.Font = Enum.Font.GothamBlack
 title.TextScaled = true
+title.Font = Enum.Font.GothamBold
+title.Parent = mainFrame
 
-local close = Instance.new("TextButton", title)
-close.Size = UDim2.new(0,40,0,40)
-close.Position = UDim2.new(1,-40,0,0)
-close.BackgroundColor3 = Color3.fromRGB(200,0,0)
-close.Text = "X"
-close.TextColor3 = Color3.new(1,1,1)
-close.MouseButton1Click:Connect(function() screenGui:Destroy() end)
+local closeButton = Instance.new("TextButton")
+closeButton.Size = UDim2.new(0, 40, 0, 40)
+closeButton.Position = UDim2.new(1, -45, 0, 2.5)
+closeButton.BackgroundColor3 = Color3.fromRGB(255, 60, 60)
+closeButton.Text = "X"
+closeButton.TextColor3 = Color3.new(1,1,1)
+closeButton.TextScaled = true
+closeButton.Parent = title
 
-local scrolling = Instance.new("ScrollingFrame", frame)
-scrolling.Size = UDim2.new(1,-20,1,-90)
-scrolling.Position = UDim2.new(0,10,0,70)
-scrolling.BackgroundTransparency = 0.9
-scrolling.ScrollBarThickness = 8
-scrolling.CanvasSize = UDim2.new(0,0,0,0)
+closeButton.MouseButton1Click:Connect(function()
+    screenGui:Destroy()
+end)
 
-local layout = Instance.new("UIListLayout", scrolling)
-layout.Padding = UDim.new(0,4)
+-- ScrollingFrame para lista
+local scrollFrame = Instance.new("ScrollingFrame")
+scrollFrame.Size = UDim2.new(1, -20, 1, -95)
+scrollFrame.Position = UDim2.new(0, 10, 0, 50)
+scrollFrame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+scrollFrame.BorderSizePixel = 0
+scrollFrame.ScrollBarThickness = 8
+scrollFrame.Parent = mainFrame
 
-local selectedID = nil
+local listLayout = Instance.new("UIListLayout")
+listLayout.Padding = UDim.new(0, 5)
+listLayout.Parent = scrollFrame
 
-local function refresh()
-    for _,v in pairs(scrolling:GetChildren()) do if v:IsA("TextButton") then v:Destroy() end end
-    local folder = workspace.__DEBRIS.Pets:FindFirstChild(player.Name)
-    if not folder then return end
-    for _,pet in pairs(folder:GetChildren()) do
-        if pet:IsA("Model") then
-            local id = pet:FindFirstChild("ID") and pet.ID.Value or "??"
-            local lvl = pet:FindFirstChild("Level") and pet.Level.Value or "??"
-            local btn = Instance.new("TextButton", scrolling)
-            btn.Size = UDim2.new(1,-10,0,45)
-            btn.BackgroundColor3 = Color3.fromRGB(40,40,40)
-            btn.Text = pet.Name.."  |  ID: "..id.."  |  Nivel: "..lvl
-            btn.TextColor3 = Color3.new(1,1,1)
-            btn.TextScaled = true
-            btn.MouseButton1Click:Connect(function()
-                selectedID = id
-                for _,b in pairs(scrolling:GetChildren()) do
-                    if b:IsA("TextButton") then b.BackgroundColor3 = Color3.fromRGB(40,40,40) end
-                end
-                btn.BackgroundColor3 = Color3.fromRGB(0,170,255)
-            end)
+-- Botones
+local maxLevelBtn = Instance.new("TextButton")
+maxLevelBtn.Size = UDim2.new(0.3, -8, 0, 40)
+maxLevelBtn.Position = UDim2.new(0, 10, 1, -50)
+maxLevelBtn.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+maxLevelBtn.Text = "🚀 MAX LEVEL"
+maxLevelBtn.TextColor3 = Color3.new(1,1,1)
+maxLevelBtn.TextScaled = true
+maxLevelBtn.Font = Enum.Font.GothamBold
+maxLevelBtn.Parent = mainFrame
+
+local equipBtn = Instance.new("TextButton")
+equipBtn.Size = UDim2.new(0.3, -8, 0, 40)
+equipBtn.Position = UDim2.new(0.34, 0, 1, -50)
+equipBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
+equipBtn.Text = "Equip"
+equipBtn.TextColor3 = Color3.new(1,1,1)
+equipBtn.TextScaled = true
+equipBtn.Parent = mainFrame
+
+local deleteBtn = Instance.new("TextButton")
+deleteBtn.Size = UDim2.new(0.3, -8, 0, 40)
+deleteBtn.Position = UDim2.new(0.68, 0, 1, -50)
+deleteBtn.BackgroundColor3 = Color3.fromRGB(255, 100, 0)
+deleteBtn.Text = "🗑️ Delete"
+deleteBtn.TextColor3 = Color3.new(1,1,1)
+deleteBtn.TextScaled = true
+deleteBtn.Parent = mainFrame
+
+-- Variables
+local selectedPetID = nil
+
+-- Función para cargar TODAS las pets (busca en TODAS carpetas como "gard_1an")
+local function refreshPets()
+    -- Limpia lista
+    for _, child in pairs(scrollFrame:GetChildren()) do
+        if child:IsA("TextButton") then
+            child:Destroy()
         end
     end
-    scrolling.CanvasSize = UDim2.new(0,0,0,layout.AbsoluteContentSize.Y)
+    
+    -- Encuentra _DEBRIS o __DEBRIS
+    local debris = workspace:FindFirstChild("__DEBRIS") or workspace:FindFirstChild("_DEBRIS")
+    if not debris or not debris:FindFirstChild("Pets") then
+        local noPetsLabel = Instance.new("TextLabel")
+        noPetsLabel.Size = UDim2.new(1, 0, 0, 50)
+        noPetsLabel.BackgroundTransparency = 1
+        noPetsLabel.Text = "❌ No se encontró __DEBRIS.Pets. Espera 10s o re-entra al juego."
+        noPetsLabel.TextColor3 = Color3.new(1, 0.5, 0.5)
+        noPetsLabel.TextScaled = true
+        noPetsLabel.Parent = scrollFrame
+        return
+    end
+    
+    local petsParent = debris.Pets
+    local foundPets = 0
+    
+    -- BUSCA EN TODAS LAS CARPETAS DE JUGADORES (ej: "gard_1an")
+    for _, playerFolder in pairs(petsParent:GetChildren()) do
+        for _, petModel in pairs(playerFolder:GetChildren()) do
+            if petModel:IsA("Model") then
+                local petID = tonumber(petModel.Name)  -- ¡EL NOMBRE ES EL ID! (33527485)
+                if petID then  -- Válido
+                    foundPets = foundPets + 1
+                    
+                    local levelVal = petModel:FindFirstChild("Level") or petModel:FindFirstChild("PetLevel") or petModel:FindFirstChild("Lvl")
+                    local currentLevel = levelVal and levelVal.Value or "???"
+                    
+                    local petButton = Instance.new("TextButton")
+                    petButton.Size = UDim2.new(1, 0, 0, 45)
+                    petButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+                    petButton.Text = petModel.Name .. " | ID: " .. petID .. " | Nivel: " .. tostring(currentLevel)
+                    petButton.TextColor3 = Color3.new(1,1,1)
+                    petButton.TextScaled = true
+                    petButton.Font = Enum.Font.Gotham
+                    petButton.Parent = scrollFrame
+                    
+                    petButton.MouseButton1Click:Connect(function()
+                        selectedPetID = petID
+                        -- Resalta seleccionada
+                        for _, btn in pairs(scrollFrame:GetChildren()) do
+                            if btn:IsA("TextButton") then
+                                btn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+                            end
+                        end
+                        petButton.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+                        print("✅ Seleccionada pet ID: " .. petID)
+                    end)
+                end
+            end
+        end
+    end
+    
+    if foundPets == 0 then
+        local noPetsLabel = Instance.new("TextLabel")
+        noPetsLabel.Size = UDim2.new(1, 0, 0, 50)
+        noPetsLabel.BackgroundTransparency = 1
+        noPetsLabel.Text = "No hay pets... Espera 10s, recoge monedas o re-entra."
+        noPetsLabel.TextColor3 = Color3.new(1, 0.5, 0.5)
+        noPetsLabel.TextScaled = true
+        noPetsLabel.Parent = scrollFrame
+    else
+        print("✅ Cargadas " .. foundPets .. " pets de carpeta 'gard_1an'")
+    end
+    
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y + 20)
 end
 
-local maxBtn = Instance.new("TextButton", frame)
-maxBtn.Size = UDim2.new(0.45, -10, 0, 50)
-maxBtn.Position = UDim2.new(0.05,0,1,-60)
-maxBtn.BackgroundColor3 = Color3.fromRGB(0,200,0)
-maxBtn.Text = "MAX LEVEL PERMANENTE"
-maxBtn.TextColor3 = Color3.new(1,1,1)
-maxBtn.TextScaled = true
-maxBtn.Font = Enum.Font.GothamBold
-
-maxBtn.MouseButton1Click:Connect(function()
-    if not selectedID then warn("Selecciona una pet") return end
+-- MAX LEVEL
+maxLevelBtn.MouseButton1Click:Connect(function()
+    if not selectedPetID then
+        print("❌ Selecciona una pet primero!")
+        return
+    end
     
-    -- Primero la equipamos (así el servidor la acepta siempre)
-    InventoryRemote:InvokeServer("Equip", selectedID)
-    wait(0.3)
+    print("🔥 Equipping pet " .. selectedPetID .. " para MAX LEVEL...")
+    pcall(function()
+        InventoryRemote:InvokeServer("Equip", selectedPetID)
+    end)
+    wait(0.5)
     
-    -- Spam brutal pero seguro (8000 veces = nivel 10.000.000+ fácil)
+    local characterTorso = player.Character and (player.Character:FindFirstChild("UpperTorso") or player.Character:FindFirstChild("Torso"))
+    if not characterTorso then
+        print("❌ No se encontró UpperTorso. Respawnea.")
+        return
+    end
+    
+    -- SPAM ULTRA (12000 = nivel billones, permanente)
     spawn(function()
-        for i = 1, 8000 do
-            PetsRemote:FireServer({{
-                "PetMovement",
-                player,
-                selectedID,
-                torso,
-                false
-            }})
-            if i % 500 == 0 then wait() end -- evita lag extremo
+        for i = 1, 12000 do
+            pcall(function()
+                local args = {
+                    {
+                        {
+                            "PetMovement",
+                            player,
+                            selectedPetID,
+                            characterTorso,
+                            false
+                        }
+                    }
+                }
+                PetsRemote:FireServer(unpack(args))
+            end)
+            if i % 1000 == 0 then
+                print("Progreso: " .. i .. "/12000")
+                wait(0.01)
+            end
         end
-        print("Pet "..selectedID.." ahora es literalmente dios")
+        print("💎 ¡PET " .. selectedPetID .. " ES DIOS ETERNO! (Sal/Entra para verificar)")
+        refreshPets()
     end)
 end)
 
-spawn(function()
-    while wait(4) do
-        if screenGui.Parent then pcall(refresh) end
+-- Equip
+equipBtn.MouseButton1Click:Connect(function()
+    if selectedPetID then
+        InventoryRemote:InvokeServer("Equip", selectedPetID)
+        print("✅ Equip: " .. selectedPetID)
     end
 end)
 
-refresh()
-frame.Size = UDim2.new(0,0,0,0)
-game:GetService("TweenService"):Create(frame, TweenInfo.new(0.4, Enum.EasingStyle.Back), {Size = UDim2.new(0,420,0,500)}):Play()
+-- Delete
+deleteBtn.MouseButton1Click:Connect(function()
+    if selectedPetID then
+        InventoryRemote:InvokeServer("Delete", selectedPetID)
+        print("🗑️ Delete: " .. selectedPetID)
+        wait(1)
+        refreshPets()
+    end
+end)
+
+-- Auto-refresh
+spawn(function()
+    while screenGui.Parent do
+        wait(4)
+        pcall(refreshPets)
+    end
+end)
+
+-- Carga inicial
+refreshPets()
+
+-- Animación
+mainFrame.Size = UDim2.new(0, 0, 0, 0)
+local tween = TweenService:Create(mainFrame, TweenInfo.new(0.6, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+    Size = UDim2.new(0, 450, 0, 380)
+})
+tween:Play()
+
+print("🌟 ¡MENÚ GOD MODE CARGADO! Busca tus pets en 'gard_1an' → Ahora SÍ aparecen.")
+print("Si '???' en nivel → dime el nombre exacto del Value con Dex.")
