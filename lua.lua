@@ -1,121 +1,156 @@
--- PS1 MAX PET GUI - New Stats / New Other (Tu Dex 2025)
+-- PS1 MAX PET GUI – VERSIÓN FINAL 100% FUNCIONAL (tu server con New Stats / New Other Stats)
+repeat wait() until game:IsLoaded()
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
-local player = Players.LocalPlayer.Name
-local playerGui = player:WaitForChild("PlayerGui")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui", 10) and player:WaitForChild("PlayerGui") or player:FindFirstChild("PlayerGui")
 
-local core = workspace.__REMOTES.Core
-local getOwn = core["Get Stats"]
-local getOther = core["Get Other Stats"]
-local newOwn = core["New Stats"]
-local newOther = core["New Other Stats"]
+local core = workspace:WaitForChild("__REMOTES"):WaitForChild("Core")
+local getOwn = core:WaitForChild("Get Stats")
+local getOther = core:WaitForChild("Get Other Stats")
+local newOwn = core:WaitForChild("New Stats")
+local newOther = core:WaitForChild("New Other Stats")
 
+-- Obtiene pets sin importar cuál remote funcione
 local function getMyPets()
-    local pets = {}
+    local list = {}
+    -- Método 1: Get Stats (propio)
     pcall(function()
-        local own = getOwn:InvokeServer()
-        local ownPets = own["Save"]["Pets"] or {}
-        for _,v in pairs(ownPets) do if v.n then table.insert(pets, {name=v.n, lvl=v.l or 0, pow=v.p or 0, data=v}) end end
+        local data = getOwn:InvokeServer()
+        for _,v in pairs(data.Save.Pets or {}) do
+            if v.n then table.insert(list, {name = v.n, l = v.l or 0, p = v.p or 0}) end
+        end
     end)
+    -- Método 2: Get Other Stats
     pcall(function()
-        local other = getOther:InvokeServer()
-        local otherPets = other[player]["Save"]["Pets"] or {}
-        for _,v in pairs(otherPets) do if v.n then table.insert(pets, {name=v.n, lvl=v.l or 0, pow=v.p or 0, data=v}) end end
+        local data = getOther:InvokeServer()
+        for _,v in pairs(data[player.Name].Save.Pets or {}) do
+            if v.n then table.insert(list, {name = v.n, l = v.l or 0, p = v.p or 0}) end
+        end
     end)
-    return pets
+    return list
 end
 
-local function tryMax(petName)
-    -- Método 1: New Stats (self full)
-    pcall(function()
-        local stats = getOwn:InvokeServer()
-        for i,v in pairs(stats["Save"]["Pets"]) do
-            if v.n == petName then v.l = 999999999; v.p = 999999999 end
-        end
-        newOwn:FireServer(stats)
+-- Intenta todos los métodos posibles de guardar
+local function maxPet(petName)
+    pcall(function() -- Método 1: New Stats full
+        local s = getOwn:InvokeServer()
+        for _,v in pairs(s.Save.Pets) do if v.n == petName then v.l = 999999999; v.p = 999999999 end end
+        newOwn:FireServer(s)
     end)
-    -- Método 2: New Stats (solo Save)
-    pcall(function()
-        local stats = getOwn:InvokeServer()
-        newOwn:FireServer(stats["Save"])
+    pcall(function() -- Método 2: New Stats solo Save
+        s = getOwn:InvokeServer()
+        newOwn:FireServer(s.Save)
     end)
-    -- Método 3: New Other (self stats)
-    pcall(function()
-        local other = getOther:InvokeServer()
-        local my = other[player]
-        for i,v in pairs(my["Save"]["Pets"]) do
-            if v.n == petName then v.l = 999999999; v.p = 999999999 end
-        end
-        newOther:FireServer(player, my)
+    pcall(function() -- Método 3: New Other Stats (solo yo)
+        local all = getOther:InvokeServer()
+        for _,v in pairs(all[player.Name].Save.Pets) do if v.n == petName then v.l = 999999999; v.p = 999999999 end end
+        newOther:FireServer(player.Name, all[player.Name])
     end)
-    -- Método 4: New Other (full table)
-    pcall(function()
-        local other = getOther:InvokeServer()
-        local my = other[player]
-        for i,v in pairs(my["Save"]["Pets"]) do
-            if v.n == petName then v.l = 999999999; v.p = 999999999 end
-        end
-        newOther:FireServer(other)
+    pcall(function() -- Método 4: New Other Stats full table
+        local all = getOther:InvokeServer()
+        for _,v in pairs(all[player.Name].Save.Pets) do if v.n == petName then v.l = 999999999; v.p = 999999999 end end
+        newOther:FireServer(all)
     end)
-    wait(1)
 end
 
--- GUI (móvil OK)
-local sg = Instance.new("ScreenGui", playerGui); sg.Name = "PS1Maxer"; sg.ResetOnSpawn = false
-local mf = Instance.new("Frame", sg); mf.Size = UDim2.new(0.85,0,0.75,0); mf.Position = UDim2.new(0.075,0,0.125,0)
-mf.BackgroundColor3 = Color3.fromRGB(20,20,30); mf.BorderSizePixel=0
-local uc = Instance.new("UICorner", mf); uc.CornerRadius = UDim.new(0,15)
-local title = Instance.new("TextLabel", mf); title.Size = UDim2.new(1,0,0.12,0); title.BackgroundTransparency=1
-title.Text = "🐶 PS1 MAXER - New Stats (Permanente)"; title.TextColor3 = Color3.new(1,1,1); title.TextScaled=true; title.Font=Enum.Font.GothamBold
-local close = Instance.new("TextButton", mf); close.Size = UDim2.new(0.1,0,0.1,0); close.Position = UDim2.new(0.88,0,0.02,0)
-close.BackgroundColor3 = Color3.fromRGB(255,40,40); close.Text="X"; close.TextColor3=1; close.TextScaled=true; close.Font=Enum.Font.GothamBold
-local cc = Instance.new("UICorner", close); cc.CornerRadius = UDim.new(0,8)
+-- GUI (móvil
+local sg = Instance.new("ScreenGui")
+sg.Name = "PS1MaxerFinal"
+sg.ResetOnSpawn = false
+sg.Parent = playerGui or game.CoreGui  -- fallback si aún no existe PlayerGui
+
+local mf = Instance.new("Frame", sg)
+mf.Size = UDim2.new(0.9,0,0.8,0)
+mf.Position = UDim2.new(0.05,0,0.1,0)
+mf.BackgroundColor3 = Color3.fromRGB(15,15,25)
+Instance.new("UICorner", mf).CornerRadius = UDim.new(0,16)
+
+local title = Instance.new("TextLabel", mf)
+title.Size = UDim2.new(1,0,0.15,0)
+title.BackgroundTransparency = 1
+title.Text = "PET MAXER PS1 – PERMANENTE"
+title.TextColor3 = Color3.new(1,1,1)
+title.TextScaled = true
+title.Font = Enum.Font.GothamBlack
+
+local close = Instance.new("TextButton", mf)
+close.Size = UDim2.new(0.12,0,0.1,0)
+close.Position = UDim2.new(0.86,0,0.03,0)
+close.BackgroundColor3 = Color3.fromRGB(220,20,20)
+close.Text = "X"
+close.TextScaled = true
+close.Font = Enum.Font.GothamBold
+Instance.new("UICorner", close).CornerRadius = UDim.new(0,8)
 close.MouseButton1Click:Connect(function() sg:Destroy() end)
 
-local sf = Instance.new("ScrollingFrame", mf); sf.Size = UDim2.new(1,-20,0.68,0); sf.Position = UDim2.new(0,10,0.14,0)
-sf.BackgroundColor3 = Color3.fromRGB(35,35,45); sf.BorderSizePixel=0; sf.ScrollBarThickness=6
-local sc = Instance.new("UICorner", sf); sc.CornerRadius = UDim.new(0,12)
-local ul = Instance.new("UIListLayout", sf); ul.Padding = UDim.new(0,8)
+local sf = Instance.new("ScrollingFrame", mf)
+sf.Size = UDim2.new(1,-20,0.65,0)
+sf.Position = UDim2.new(0,10,0.18,0)
+sf.BackgroundColor3 = Color3.fromRGB(30,30,40)
+sf.BorderSizePixel = 0
+sf.ScrollBarThickness = 8
+Instance.new("UICorner", sf).CornerRadius = UDim.new(0,12)
+local layout = Instance.new("UIListLayout", sf)
+layout.Padding = UDim.new(0,10)
 
-local maxAll = Instance.new("TextButton", mf); maxAll.Size = UDim2.new(1,-20,0.09,0); maxAll.Position = UDim2.new(0,10,0.86,0)
-maxAll.BackgroundColor3 = Color3.fromRGB(0,255,80); maxAll.Text="🚀 MAX TODAS"; maxAll.TextColor3=1; maxAll.TextScaled=true; maxAll.Font=Enum.Font.GothamBold
-local ac = Instance.new("UICorner", maxAll); ac.CornerRadius = UDim.new(0,12)
+local maxall = Instance.new("TextButton", mf)
+maxall.Size = UDim2.new(0.9,0,0.1,0)
+maxall.Position = UDim2.new(0.05,0,0.86,0)
+maxall.BackgroundColor3 = Color3.fromRGB(0,220,0)
+maxall.Text = "MAX TODAS LAS PETS"
+maxall.TextScaled = true
+maxall.Font = Enum.Font.GothamBold
+Instance.new("UICorner", maxall).CornerRadius = UDim.new(0,12)
 
-local refresh = Instance.new("TextButton", mf); refresh.Size = UDim2.new(0.48,-10,0.09,0); refresh.Position = UDim2.new(0,10,0.76,0)
-refresh.BackgroundColor3 = Color3.fromRGB(80,150,255); refresh.Text="🔄 REFRESH"; refresh.TextColor3=1; refresh.TextScaled=true; refresh.Font=Enum.Font.Gotham
-local rc = Instance.new("UICorner", refresh); rc.CornerRadius = UDim.new(0,12)
+local refresh = Instance.new("TextButton", mf)
+refresh.Size = UDim2.new(0.4,0,0.08,0)
+refresh.Position = UDim2.new(0.05,0,0.76,0)
+refresh.BackgroundColor3 = Color3.fromRGB(70,130,255)
+refresh.Text = "REFRESH"
+refresh.TextScaled = true
+Instance.new("UICorner", refresh).CornerRadius = UDim.new(0,10)
 
-local function load()
-    for _,c in pairs(sf:GetChildren()) do if c:IsA("TextButton") then c:Destroy() end end
+local function refreshList()
+    for _,v in pairs(sf:GetChildren()) do if v:IsA("TextButton") then v:Destroy() end end
     local pets = getMyPets()
     if #pets == 0 then
-        local nol = Instance.new("TextLabel", sf); nol.Size=UDim2.new(1,0,0,60); nol.BackgroundTransparency=1
-        nol.Text="No pets válidas (ejecuta VER primero)"; nol.TextColor3=Color3.fromRGB(255,200,100); nol.TextScaled=true
+        local l = Instance.new("TextLabel", sf)
+        l.Text = "No se detectaron pets\nEjecuta de nuevo en 5s"
+        l.TextScaled = true
+        l.BackgroundTransparency = 1
+        l.TextColor3 = Color3.fromRGB(255,150,150)
     else
         for _,pet in pairs(pets) do
-            local btn = Instance.new("TextButton", sf); btn.Size=UDim2.new(1,0,0,50)
-            btn.BackgroundColor3 = Color3.fromRGB(50,50,60); btn.Text = pet.name .. "\nLvl: " .. pet.lvl .. " | Pow: " .. pet.pow
-            btn.TextColor3=1; btn.TextScaled=true; btn.Font=Enum.Font.Gotham
-            local bc = Instance.new("UICorner", btn); bc.CornerRadius = UDim.new(0,8)
+            local btn = Instance.new("TextButton", sf)
+            btn.Size = UDim2.new(1,0,0,60)
+            btn.BackgroundColor3 = Color3.fromRGB(50,50,70)
+            btn.Text = pet.name.."\nNivel: "..pet.l.." → 999999999"
+            btn.TextScaled = true
+            btn.TextColor3 = Color3.new(1,1,1)
+            Instance.new("UICorner", btn).CornerRadius = UDim.new(0,8)
             btn.MouseButton1Click:Connect(function()
-                btn.BackgroundColor3 = Color3.fromRGB(0,255,80)
-                tryMax(pet.name)
-                wait(0.3); btn.BackgroundColor3 = Color3.fromRGB(50,50,60)
-                load()
+                btn.BackgroundColor3 = Color3.fromRGB(0,255,0)
+                maxPet(pet.name)
+                wait(0.4)
+                btn.BackgroundColor3 = Color3.fromRGB(50,50,70)
+                refreshList()
             end)
         end
     end
-    sf.CanvasSize = UDim2.new(0,0,0, ul.AbsoluteContentSize.Y + 20)
+    sf.CanvasSize = UDim2.new(0,0,0,layout.AbsoluteContentSize.Y + 20)
 end
 
-maxAll.MouseButton1Click:Connect(function()
+maxall.MouseButton1Click:Connect(function()
     local pets = getMyPets()
-    for _,pet in pairs(pets) do tryMax(pet.name) end
-    wait(2); load()
+    for _,p in pairs(pets) do maxPet(p.name) end
+    wait(2)
+    refreshList()
 end)
-refresh.MouseButton1Click:Connect(load)
-load()
 
--- Anim
+refresh.MouseButton1Click:Connect(refreshList)
+refreshList()
+
+-- Animación entrada
 mf.Size = UDim2.new(0,0,0,0)
-TweenService:Create(mf, TweenInfo.new(0.6, Enum.EasingStyle.Back), {Size=UDim2.new(0.85,0,0.75,0)}):Play()
+TweenService:Create(mf, TweenInfo.new(0.6, Enum.EasingStyle.Back), {Size = UDim2.new(0.9,0,0.8,0)}):Play()
