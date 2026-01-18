@@ -1,386 +1,340 @@
--- PET SIM 1 → GOD MODE PERMANENTE 2025 + CONSOLE COPIER
--- Combina el editor de pets con la utilidad para copiar output de consola
+-- Delta Console Logger
+-- Script compatible con Delta Executor para Roblox
 
 local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
+
 local player = Players.LocalPlayer
 
--- ================== CONFIGURACIÓN DE CONSOLA ==================
-local consoleOutput = {}
-
--- Interceptar prints para capturarlos
-local oldPrint = print
-print = function(...)
-    local args = {...}
-    local str = table.concat(args, "\t")
-    oldPrint(...)
-    table.insert(consoleOutput, "[PRINT] " .. str)
-    if #consoleOutput > 10000 then
-        table.remove(consoleOutput, 1)
-    end
-end
-
-local oldWarn = warn
-warn = function(...)
-    local args = {...}
-    local str = table.concat(args, "\t")
-    oldWarn(...)
-    table.insert(consoleOutput, "[WARN] " .. str)
-    if #consoleOutput > 10000 then
-        table.remove(consoleOutput, 1)
-    end
-end
-
--- ================== GUI PRINCIPAL ==================
+-- Crear ScreenGui
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "PS1GodPets"
-screenGui.Parent = player:WaitForChild("PlayerGui")
+screenGui.Name = "DeltaConsoleLogger"
 screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+-- Proteger el GUI (compatible con Delta)
+if syn and syn.protect_gui then
+    syn.protect_gui(screenGui)
+elseif gethui then
+    screenGui.Parent = gethui()
+else
+    screenGui.Parent = CoreGui
+end
 
 -- Frame principal
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 500, 0, 450)
-mainFrame.Position = UDim2.new(0.5, -250, 0.5, -225)
-mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 600, 0, 400)
+mainFrame.Position = UDim2.new(0.5, -300, 0.5, -200)
+mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
 mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Draggable = false
 mainFrame.Parent = screenGui
 
-local uicorner = Instance.new("UICorner")
-uicorner.CornerRadius = UDim.new(0, 12)
-uicorner.Parent = mainFrame
+-- Sombra
+local shadow = Instance.new("ImageLabel")
+shadow.Name = "Shadow"
+shadow.BackgroundTransparency = 1
+shadow.Position = UDim2.new(0, -15, 0, -15)
+shadow.Size = UDim2.new(1, 30, 1, 30)
+shadow.ZIndex = 0
+shadow.Image = "rbxasset://textures/ui/Shadow.png"
+shadow.ImageColor3 = Color3.fromRGB(0, 0, 0)
+shadow.ImageTransparency = 0.5
+shadow.ScaleType = Enum.ScaleType.Slice
+shadow.SliceCenter = Rect.new(10, 10, 118, 118)
+shadow.Parent = mainFrame
+
+-- Corner para el frame principal
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 10)
+mainCorner.Parent = mainFrame
+
+-- Header
+local header = Instance.new("Frame")
+header.Name = "Header"
+header.Size = UDim2.new(1, 0, 0, 40)
+header.BackgroundColor3 = Color3.fromRGB(138, 43, 226)
+header.BorderSizePixel = 0
+header.Parent = mainFrame
+
+local headerCorner = Instance.new("UICorner")
+headerCorner.CornerRadius = UDim.new(0, 10)
+headerCorner.Parent = header
+
+-- Fix para que solo la parte superior tenga esquinas redondeadas
+local headerFix = Instance.new("Frame")
+headerFix.Size = UDim2.new(1, 0, 0, 10)
+headerFix.Position = UDim2.new(0, 0, 1, -10)
+headerFix.BackgroundColor3 = Color3.fromRGB(138, 43, 226)
+headerFix.BorderSizePixel = 0
+headerFix.Parent = header
 
 -- Título
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 45)
-title.BackgroundColor3 = Color3.fromRGB(255, 140, 0)
-title.Text = "🔥 PET SIM 1 - GOD MODE + CONSOLE COPIER"
-title.TextColor3 = Color3.new(1,1,1)
-title.TextScaled = true
+title.Name = "Title"
+title.Size = UDim2.new(1, -200, 1, 0)
+title.Position = UDim2.new(0, 10, 0, 0)
+title.BackgroundTransparency = 1
 title.Font = Enum.Font.GothamBold
-title.Parent = mainFrame
+title.Text = "🎮 Delta Console Logger"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextSize = 16
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = header
 
-local closeButton = Instance.new("TextButton")
-closeButton.Size = UDim2.new(0, 40, 0, 40)
-closeButton.Position = UDim2.new(1, -45, 0, 2.5)
-closeButton.BackgroundColor3 = Color3.fromRGB(255, 60, 60)
-closeButton.Text = "X"
-closeButton.TextColor3 = Color3.new(1,1,1)
-closeButton.TextScaled = true
-closeButton.Parent = title
-closeButton.MouseButton1Click:Connect(function()
-    screenGui:Destroy()
-end)
+-- Contador de logs
+local logCounter = Instance.new("TextLabel")
+logCounter.Name = "LogCounter"
+logCounter.Size = UDim2.new(0, 80, 1, 0)
+logCounter.Position = UDim2.new(1, -190, 0, 0)
+logCounter.BackgroundTransparency = 1
+logCounter.Font = Enum.Font.GothamBold
+logCounter.Text = "(0 logs)"
+logCounter.TextColor3 = Color3.fromRGB(200, 200, 200)
+logCounter.TextSize = 12
+logCounter.Parent = header
 
--- ================== PESTAÑAS ==================
-local tabsFrame = Instance.new("Frame")
-tabsFrame.Size = UDim2.new(1, -20, 0, 40)
-tabsFrame.Position = UDim2.new(0, 10, 0, 50)
-tabsFrame.BackgroundTransparency = 1
-tabsFrame.Parent = mainFrame
+-- Contenedor de botones
+local buttonContainer = Instance.new("Frame")
+buttonContainer.Name = "ButtonContainer"
+buttonContainer.Size = UDim2.new(0, 150, 1, 0)
+buttonContainer.Position = UDim2.new(1, -160, 0, 0)
+buttonContainer.BackgroundTransparency = 1
+buttonContainer.Parent = header
 
-local petTab = Instance.new("TextButton")
-petTab.Size = UDim2.new(0.5, -5, 1, 0)
-petTab.Position = UDim2.new(0, 0, 0, 0)
-petTab.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
-petTab.Text = "🐉 PET EDITOR"
-petTab.TextColor3 = Color3.new(1,1,1)
-petTab.Font = Enum.Font.GothamBold
-petTab.TextSize = 16
-petTab.Parent = tabsFrame
-
-local consoleTab = Instance.new("TextButton")
-consoleTab.Size = UDim2.new(0.5, -5, 1, 0)
-consoleTab.Position = UDim2.new(0.5, 5, 0, 0)
-consoleTab.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-consoleTab.Text = "📋 CONSOLE COPIER"
-consoleTab.TextColor3 = Color3.new(1,1,1)
-consoleTab.Font = Enum.Font.GothamBold
-consoleTab.TextSize = 16
-consoleTab.Parent = tabsFrame
-
--- ================== CONTENIDO PET EDITOR ==================
-local petContent = Instance.new("Frame")
-petContent.Size = UDim2.new(1, -20, 1, -135)
-petContent.Position = UDim2.new(0, 10, 0, 95)
-petContent.BackgroundTransparency = 1
-petContent.Visible = true
-petContent.Parent = mainFrame
-
--- ScrollingFrame para lista de pets
-local scrollFrame = Instance.new("ScrollingFrame")
-scrollFrame.Size = UDim2.new(1, 0, 1, -50)
-scrollFrame.Position = UDim2.new(0, 0, 0, 0)
-scrollFrame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
-scrollFrame.BorderSizePixel = 0
-scrollFrame.ScrollBarThickness = 8
-scrollFrame.Parent = petContent
-
-local listLayout = Instance.new("UIListLayout")
-listLayout.Padding = UDim.new(0, 5)
-listLayout.Parent = scrollFrame
-
--- Botones del pet editor
-local maxLevelBtn = Instance.new("TextButton")
-maxLevelBtn.Size = UDim2.new(0.32, -6, 0, 40)
-maxLevelBtn.Position = UDim2.new(0, 10, 1, -50)
-maxLevelBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
-maxLevelBtn.Text = "🚀 MAX LEVEL"
-maxLevelBtn.TextColor3 = Color3.new(1,1,1)
-maxLevelBtn.TextScaled = true
-maxLevelBtn.Font = Enum.Font.GothamBold
-maxLevelBtn.Parent = petContent
-
-local equipBtn = Instance.new("TextButton")
-equipBtn.Size = UDim2.new(0.32, -6, 0, 40)
-equipBtn.Position = UDim2.new(0.34, 0, 1, -50)
-equipBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
-equipBtn.Text = "EQUIP"
-equipBtn.TextColor3 = Color3.new(1,1,1)
-equipBtn.TextScaled = true
-equipBtn.Parent = petContent
-
-local deleteBtn = Instance.new("TextButton")
-deleteBtn.Size = UDim2.new(0.32, -6, 0, 40)
-deleteBtn.Position = UDim2.new(0.68, 0, 1, -50)
-deleteBtn.BackgroundColor3 = Color3.fromRGB(255, 100, 0)
-deleteBtn.Text = "🗑️ DELETE"
-deleteBtn.TextColor3 = Color3.new(1,1,1)
-deleteBtn.TextScaled = true
-deleteBtn.Parent = petContent
-
--- ================== CONTENIDO CONSOLE COPIER ==================
-local consoleContent = Instance.new("Frame")
-consoleContent.Size = UDim2.new(1, -20, 1, -135)
-consoleContent.Position = UDim2.new(0, 10, 0, 95)
-consoleContent.BackgroundTransparency = 1
-consoleContent.Visible = false
-consoleContent.Parent = mainFrame
-
--- TextBox para consola
-local consoleTextBox = Instance.new("TextBox")
-consoleTextBox.Size = UDim2.new(1, 0, 1, -60)
-consoleTextBox.Position = UDim2.new(0, 0, 0, 0)
-consoleTextBox.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-consoleTextBox.TextColor3 = Color3.fromRGB(0, 255, 100)
-consoleTextBox.TextXAlignment = Enum.TextXAlignment.Left
-consoleTextBox.TextYAlignment = Enum.TextYAlignment.Top
-consoleTextBox.MultiLine = true
-consoleTextBox.TextWrapped = true
-consoleTextBox.ClearTextOnFocus = false
-consoleTextBox.Font = Enum.Font.Code
-consoleTextBox.TextSize = 14
-consoleTextBox.Text = "Esperando salida de consola..."
-consoleTextBox.Parent = consoleContent
-
-local copyBtn = Instance.new("TextButton")
-copyBtn.Size = UDim2.new(1, 0, 0, 50)
-copyBtn.Position = UDim2.new(0, 0, 1, -50)
-copyBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
-copyBtn.Text = "📋 COPIAR TODO AL PORTAPAPELES"
-copyBtn.TextColor3 = Color3.new(1,1,1)
-copyBtn.Font = Enum.Font.GothamBold
-copyBtn.TextSize = 18
-copyBtn.Parent = consoleContent
-
--- ================== VARIABLES Y FUNCIONES ==================
-local selectedPetID = nil
-local PetsRemote = workspace:WaitForChild("__REMOTES").Game.Pets
-local InventoryRemote = workspace:WaitForChild("__REMOTES").Game.Inventory
-
--- Función para actualizar consola
-local function updateConsole()
-    consoleTextBox.Text = table.concat(consoleOutput, "\n")
-    consoleTextBox.CursorPosition = #consoleTextBox.Text + 1
+-- Función para crear botones del header
+local function createHeaderButton(name, text, position, color, callback)
+    local btn = Instance.new("TextButton")
+    btn.Name = name
+    btn.Size = UDim2.new(0, 30, 0, 30)
+    btn.Position = position
+    btn.BackgroundColor3 = color or Color3.fromRGB(50, 50, 60)
+    btn.BorderSizePixel = 0
+    btn.Font = Enum.Font.GothamBold
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextSize = 14
+    btn.Parent = buttonContainer
+    
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(0, 6)
+    btnCorner.Parent = btn
+    
+    btn.MouseButton1Click:Connect(callback)
+    
+    btn.MouseEnter:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(70, 70, 80)}):Play()
+    end)
+    
+    btn.MouseLeave:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.2), {BackgroundColor3 = color or Color3.fromRGB(50, 50, 60)}):Play()
+    end)
+    
+    return btn
 end
 
--- Función para refrescar pets
-local function refreshPets()
-    for _, child in pairs(scrollFrame:GetChildren()) do
-        if child:IsA("TextButton") then
+-- Variables de estado
+local logs = {}
+local isMinimized = false
+local originalSize = mainFrame.Size
+
+-- Contenedor de logs
+local logContainer = Instance.new("ScrollingFrame")
+logContainer.Name = "LogContainer"
+logContainer.Size = UDim2.new(1, -20, 1, -90)
+logContainer.Position = UDim2.new(0, 10, 0, 50)
+logContainer.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+logContainer.BorderSizePixel = 0
+logContainer.ScrollBarThickness = 6
+logContainer.ScrollBarImageColor3 = Color3.fromRGB(138, 43, 226)
+logContainer.CanvasSize = UDim2.new(0, 0, 0, 0)
+logContainer.Parent = mainFrame
+
+local logCorner = Instance.new("UICorner")
+logCorner.CornerRadius = UDim.new(0, 8)
+logCorner.Parent = logContainer
+
+-- Layout para los logs
+local logLayout = Instance.new("UIListLayout")
+logLayout.Padding = UDim.new(0, 5)
+logLayout.SortOrder = Enum.SortOrder.LayoutOrder
+logLayout.Parent = logContainer
+
+-- Botón Clear (Limpiar)
+local clearBtn = createHeaderButton("ClearBtn", "🗑️", UDim2.new(0, 0, 0.5, -15), Color3.fromRGB(220, 53, 69), function()
+    for _, child in ipairs(logContainer:GetChildren()) do
+        if child:IsA("Frame") then
             child:Destroy()
         end
     end
-    
-    local debris = workspace:FindFirstChild("__DEBRIS") or workspace:FindFirstChild("_DEBRIS")
-    if not debris or not debris:FindFirstChild("Pets") then
-        local noPetsLabel = Instance.new("TextLabel")
-        noPetsLabel.Size = UDim2.new(1, 0, 0, 50)
-        noPetsLabel.BackgroundTransparency = 1
-        noPetsLabel.Text = "❌ No se encontró __DEBRIS.Pets. Espera 10s o re-entra."
-        noPetsLabel.TextColor3 = Color3.new(1, 0.5, 0.5)
-        noPetsLabel.TextScaled = true
-        noPetsLabel.Parent = scrollFrame
-        return
+    logs = {}
+    logCounter.Text = "(0 logs)"
+end)
+
+-- Botón Copy All
+local copyBtn = createHeaderButton("CopyBtn", "📋", UDim2.new(0, 35, 0.5, -15), Color3.fromRGB(40, 167, 69), function()
+    local allText = ""
+    for i, log in ipairs(logs) do
+        allText = allText .. log .. "\n"
     end
     
-    local petsParent = debris.Pets
-    local foundPets = 0
-    
-    for _, playerFolder in pairs(petsParent:GetChildren()) do
-        for _, petModel in pairs(playerFolder:GetChildren()) do
-            if petModel:IsA("Model") then
-                local petID = tonumber(petModel.Name)
-                if petID then
-                    foundPets = foundPets + 1
-                    
-                    local levelVal = petModel:FindFirstChild("Level") or petModel:FindFirstChild("PetLevel") or petModel:FindFirstChild("Lvl")
-                    local currentLevel = levelVal and levelVal.Value or "???"
-                    
-                    local petButton = Instance.new("TextButton")
-                    petButton.Size = UDim2.new(1, 0, 0, 45)
-                    petButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-                    petButton.Text = "ID: " .. petID .. " | Nivel: " .. tostring(currentLevel)
-                    petButton.TextColor3 = Color3.new(1,1,1)
-                    petButton.TextScaled = true
-                    petButton.Font = Enum.Font.Gotham
-                    petButton.Parent = scrollFrame
-                    
-                    petButton.MouseButton1Click:Connect(function()
-                        selectedPetID = petID
-                        for _, btn in pairs(scrollFrame:GetChildren()) do
-                            if btn:IsA("TextButton") then
-                                btn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-                            end
-                        end
-                        petButton.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
-                        print("✅ Pet seleccionada: " .. petID)
-                    end)
-                end
-            end
-        end
-    end
-    
-    if foundPets == 0 then
-        local noPetsLabel = Instance.new("TextLabel")
-        noPetsLabel.Size = UDim2.new(1, 0, 0, 50)
-        noPetsLabel.BackgroundTransparency = 1
-        noPetsLabel.Text = "No hay pets... Espera 10s o recoge monedas."
-        noPetsLabel.TextColor3 = Color3.new(1, 0.5, 0.5)
-        noPetsLabel.TextScaled = true
-        noPetsLabel.Parent = scrollFrame
+    if setclipboard then
+        setclipboard(allText)
+        copyBtn.Text = "✓"
+        wait(1)
+        copyBtn.Text = "📋"
     else
-        print("✅ " .. foundPets .. " pets encontradas")
+        warn("setclipboard no está disponible en este executor")
+    end
+end)
+
+-- Botón Minimize/Maximize
+local minimizeBtn = createHeaderButton("MinimizeBtn", "−", UDim2.new(0, 70, 0.5, -15), Color3.fromRGB(255, 193, 7), function()
+    isMinimized = not isMinimized
+    
+    if isMinimized then
+        originalSize = mainFrame.Size
+        TweenService:Create(mainFrame, TweenInfo.new(0.3), {Size = UDim2.new(0, 400, 0, 40)}):Play()
+        logContainer.Visible = false
+        minimizeBtn.Text = "□"
+    else
+        TweenService:Create(mainFrame, TweenInfo.new(0.3), {Size = originalSize}):Play()
+        wait(0.3)
+        logContainer.Visible = true
+        minimizeBtn.Text = "−"
+    end
+end)
+
+-- Botón Close
+local closeBtn = createHeaderButton("CloseBtn", "✕", UDim2.new(0, 105, 0.5, -15), Color3.fromRGB(220, 53, 69), function()
+    screenGui:Destroy()
+end)
+
+-- Hacer el frame draggable
+local dragging = false
+local dragInput, mousePos, framePos
+
+header.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        mousePos = input.Position
+        framePos = mainFrame.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local delta = input.Position - mousePos
+        mainFrame.Position = UDim2.new(
+            framePos.X.Scale, 
+            framePos.X.Offset + delta.X,
+            framePos.Y.Scale, 
+            framePos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+-- Función para añadir un log
+local function addLog(logType, message)
+    local timestamp = os.date("%H:%M:%S")
+    local logText = string.format("[%s] [%s] %s", timestamp, logType:upper(), tostring(message))
+    table.insert(logs, logText)
+    
+    local logFrame = Instance.new("Frame")
+    logFrame.Size = UDim2.new(1, -10, 0, 0)
+    logFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    logFrame.BorderSizePixel = 0
+    logFrame.AutomaticSize = Enum.AutomaticSize.Y
+    logFrame.Parent = logContainer
+    
+    local logFrameCorner = Instance.new("UICorner")
+    logFrameCorner.CornerRadius = UDim.new(0, 6)
+    logFrameCorner.Parent = logFrame
+    
+    -- Barra de color según el tipo
+    local colorBar = Instance.new("Frame")
+    colorBar.Size = UDim2.new(0, 4, 1, 0)
+    colorBar.BorderSizePixel = 0
+    colorBar.Parent = logFrame
+    
+    if logType == "error" then
+        colorBar.BackgroundColor3 = Color3.fromRGB(220, 53, 69)
+    elseif logType == "warn" then
+        colorBar.BackgroundColor3 = Color3.fromRGB(255, 193, 7)
+    elseif logType == "info" then
+        colorBar.BackgroundColor3 = Color3.fromRGB(0, 123, 255)
+    else
+        colorBar.BackgroundColor3 = Color3.fromRGB(108, 117, 125)
     end
     
-    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y + 20)
+    local logLabel = Instance.new("TextLabel")
+    logLabel.Size = UDim2.new(1, -15, 1, 0)
+    logLabel.Position = UDim2.new(0, 10, 0, 0)
+    logLabel.BackgroundTransparency = 1
+    logLabel.Font = Enum.Font.Code
+    logLabel.Text = logText
+    logLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+    logLabel.TextSize = 12
+    logLabel.TextXAlignment = Enum.TextXAlignment.Left
+    logLabel.TextYAlignment = Enum.TextYAlignment.Top
+    logLabel.TextWrapped = true
+    logLabel.AutomaticSize = Enum.AutomaticSize.Y
+    logLabel.Parent = logFrame
+    
+    local padding = Instance.new("UIPadding")
+    padding.PaddingTop = UDim.new(0, 5)
+    padding.PaddingBottom = UDim.new(0, 5)
+    padding.Parent = logFrame
+    
+    -- Actualizar canvas size
+    logContainer.CanvasSize = UDim2.new(0, 0, 0, logLayout.AbsoluteContentSize.Y + 10)
+    logContainer.CanvasPosition = Vector2.new(0, logLayout.AbsoluteContentSize.Y)
+    
+    -- Actualizar contador
+    logCounter.Text = string.format("(%d logs)", #logs)
 end
 
--- ================== EVENTOS DE BOTONES ==================
--- Cambiar pestañas
-petTab.MouseButton1Click:Connect(function()
-    petContent.Visible = true
-    consoleContent.Visible = false
-    petTab.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
-    consoleTab.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-end)
+-- Interceptar console.log, warn, error
+local oldPrint = print
+local oldWarn = warn
+local oldError = error
 
-consoleTab.MouseButton1Click:Connect(function()
-    petContent.Visible = false
-    consoleContent.Visible = true
-    petTab.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-    consoleTab.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
-    updateConsole()
-end)
+print = function(...)
+    local args = {...}
+    local message = table.concat(args, " ")
+    addLog("log", message)
+    return oldPrint(...)
+end
 
--- Botón MAX LEVEL
-maxLevelBtn.MouseButton1Click:Connect(function()
-    if not selectedPetID then
-        print("❌ Selecciona una pet primero!")
-        return
-    end
-    
-    print("🔥 Aplicando MAX LEVEL a pet " .. selectedPetID .. "...")
-    pcall(function()
-        InventoryRemote:InvokeServer("Equip", selectedPetID)
-    end)
-    wait(0.5)
-    
-    local characterTorso = player.Character and (player.Character:FindFirstChild("UpperTorso") or player.Character:FindFirstChild("Torso"))
-    if not characterTorso then
-        print("❌ No se encontró UpperTorso. Respawnea.")
-        return
-    end
-    
-    spawn(function()
-        for i = 1, 12000 do
-            pcall(function()
-                local args = {{
-                    {
-                        "PetMovement",
-                        player,
-                        selectedPetID,
-                        characterTorso,
-                        false
-                    }
-                }}
-                PetsRemote:FireServer(unpack(args))
-            end)
-            if i % 1000 == 0 then
-                print("Progreso: " .. i .. "/12000")
-                wait(0.01)
-            end
-        end
-        print("💎 ¡PET " .. selectedPetID .. " ES DIOS ETERNO!")
-        refreshPets()
-    end)
-end)
+warn = function(...)
+    local args = {...}
+    local message = table.concat(args, " ")
+    addLog("warn", message)
+    return oldWarn(...)
+end
 
--- Botón EQUIP
-equipBtn.MouseButton1Click:Connect(function()
-    if selectedPetID then
-        InventoryRemote:InvokeServer("Equip", selectedPetID)
-        print("✅ Pet equipada: " .. selectedPetID)
-    end
-end)
+error = function(...)
+    local args = {...}
+    local message = table.concat(args, " ")
+    addLog("error", message)
+    return oldError(...)
+end
 
--- Botón DELETE
-deleteBtn.MouseButton1Click:Connect(function()
-    if selectedPetID then
-        InventoryRemote:InvokeServer("Delete", selectedPetID)
-        print("🗑️ Pet eliminada: " .. selectedPetID)
-        wait(1)
-        refreshPets()
-    end
-end)
+-- Log inicial
+print("🎮 Delta Console Logger inicializado correctamente")
+print("📝 Todos los logs de print(), warn() y error() serán capturados")
+print("✨ Compatible con Delta Executor")
 
--- Botón COPIAR CONSOLA
-copyBtn.MouseButton1Click:Connect(function()
-    local fullText = table.concat(consoleOutput, "\n")
-    if setclipboard then
-        setclipboard(fullText)
-        copyBtn.Text = "✅ COPIADO ("..#consoleOutput.." líneas)"
-        copyBtn.BackgroundColor3 = Color3.fromRGB(0, 220, 0)
-        print("✅ Consola copiada al portapapeles ("..#consoleOutput.." líneas)")
-        wait(1.5)
-        copyBtn.Text = "📋 COPIAR TODO AL PORTAPAPELES"
-        copyBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
-    else
-        print("❌ Función setclipboard no disponible")
-    end
-end)
-
--- ================== INICIALIZACIÓN ==================
--- Auto-refresh de pets
-spawn(function()
-    while screenGui.Parent do
-        wait(4)
-        pcall(refreshPets)
-        if consoleContent.Visible then
-            updateConsole()
-        end
-    end
-end)
-
--- Carga inicial
-refreshPets()
-
--- Animación de entrada
-mainFrame.Size = UDim2.new(0, 0, 0, 0)
-local tween = TweenService:Create(mainFrame, TweenInfo.new(0.6, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-    Size = UDim2.new(0, 500, 0, 450)
-})
-tween:Play()
-
-print("🌟 PET SIM 1 - GOD MODE + CONSOLE COPIER CARGADO!")
-print("💡 Usa las pestañas para cambiar entre editor de pets y visor de consola")
-print("📋 Todo lo que se imprima en consola se capturará automáticamente")
+-- Mensaje de bienvenida
+addLog("info", "Sistema de logs iniciado - Delta Compatible")
+addLog("info", "Usa los botones del header para controlar la ventana")
