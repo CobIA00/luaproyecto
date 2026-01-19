@@ -1,247 +1,189 @@
---[[
-    NexusSpy v2.1 (Corregido)
-    - Se corrigió el error HTTP 404 al cargar la librería de UI.
-    - Se añadió un mecanismo de respaldo de URL para mayor robustez.
-    - Se mejoró la gestión de errores durante la inicialización.
-    Creado y mantenido por Manus.
-]]
+-- Pet Simulator 1 EXP & Level Up Script
+-- Optimizado para Delta Executor
+-- Creado por Manus
 
---================================================================================
--- CONFIGURACIÓN Y ENTORNO
---================================================================================
-
-local Nexus = {
-    Enabled = true,
-    UI = nil,
-    EventsQueue = {},
-    DisplayedEvents = {},
-    SelectedEvent = nil,
-    Connections = {},
-    Hooks = {
-        Namecall = nil,
-        OriginalNamecall = nil,
-    }
-}
-
--- Funciones del entorno del ejecutor (compatibilidad)
-local getgenv = getgenv
-local setclipboard = setclipboard or print
-local hookmetamethod do
-    local success, result = pcall(function() return getrawmetatable(game).__namecall end)
-    if success and result then
-        hookmetamethod = function(obj, hook)
-            local mt = getrawmetatable(obj)
-            local old = mt.__namecall
-            mt.__namecall = hook
-            return old
-        end
-    else
-        warn("NexusSpy: Entorno no compatible. Se requiere 'hookmetamethod' o una metatabla de juego accesible.")
-        return
-    end
-end
-
--- Servicios de Roblox
-local CoreGui = game:GetService("CoreGui")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
 
---================================================================================
--- UTILIDADES Y SERIALIZADOR AVANZADO
---================================================================================
+-- Variables de Control
+local _G = getgenv and getgenv() or _G
+_G.ExpFarmActive = false
 
-local function SerializeValue(value, indent, visited)
-    indent = indent or ""
-    visited = visited or {}
-    local valueType = typeof(value)
+-- Intentar localizar la Librería y los Remotos
+local Library = nil
+local Remotes = nil
 
-    if value == nil then return "nil" end
-    if visited[value] then return "-> (referencia circular)" end
-
-    if valueType == "string" then return '"' .. tostring(value) .. '"'
-    elseif valueType == "Instance" then return value:GetFullName()
-    elseif valueType == "table" then
-        visited[value] = true
-        local str = "{\n"
-        local newIndent = indent .. "  "
-        for k, v in pairs(value) do
-            str = str .. newIndent .. "[" .. SerializeValue(k, newIndent, visited) .. "] = " .. SerializeValue(v, newIndent, visited) .. ",\n"
-        end
-        visited[value] = false
-        return str .. indent .. "}"
-    elseif valueType == "Vector3" then return string.format("Vector3.new(%.2f, %.2f, %.2f)", value.X, value.Y, value.Z)
-    elseif valueType == "CFrame" then
-        local x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22 = value:GetComponents()
-        return string.format("CFrame.new(%.2f, %.2f, %.2f, ...)", x, y, z)
+local function GetLibrary()
+    local success, result = pcall(function()
+        return require(LocalPlayer:WaitForChild("PlayerGui"):WaitForChild("Library"))
+    end)
+    if success then
+        Library = result
+        Remotes = Library.Remotes
     end
-
-    return tostring(value)
 end
 
---================================================================================
--- NÚCLEO LÓGICO (HOOKING Y PROCESAMIENTO POR LOTES)
---================================================================================
+GetLibrary()
 
-local function logEvent(remote, isFunction, ...)
-    if not Nexus.Enabled then return end
-    local args = table.pack(...)
-    table.insert(Nexus.EventsQueue, {
-        Remote = remote,
-        Name = remote.Name,
-        Path = remote:GetFullName(),
-        Type = isFunction and "Function" or "Event",
-        Args = args,
-        Timestamp = tick(),
-    })
-end
+-- Interfaz Gráfica (GUI)
+local ScreenGui = Instance.new("ScreenGui")
+local MainFrame = Instance.new("Frame")
+local Title = Instance.new("TextLabel")
+local ToggleBtn = Instance.new("TextButton")
+local MinimizeBtn = Instance.new("TextButton")
+local CloseBtn = Instance.new("TextButton")
+local StatusLabel = Instance.new("TextLabel")
 
-Nexus.Hooks.Namecall = function(self, ...)
-    local method = getnamecallmethod()
-    local success, result
+ScreenGui.Name = "PetSimExpMenu"
+ScreenGui.Parent = (gethui and gethui()) or (game:GetService("CoreGui"))
+ScreenGui.ResetOnSpawn = false
 
-    if self and Nexus.Enabled and typeof(self) == "Instance" and (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
-        if method == "FireServer" then
-            logEvent(self, false, ...)
-        elseif method == "InvokeServer" then
-            success, result = pcall(Nexus.Hooks.OriginalNamecall, self, ...)
-            logEvent(self, true, ...)
-            if success then return result else return nil end
-        end
+MainFrame.Name = "MainFrame"
+MainFrame.Parent = ScreenGui
+MainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+MainFrame.BorderSizePixel = 0
+MainFrame.Position = UDim2.new(0.05, 0, 0.1, 0)
+MainFrame.Size = UDim2.new(0, 180, 0, 130)
+MainFrame.Active = true
+MainFrame.Draggable = true
+
+Title.Name = "Title"
+Title.Parent = MainFrame
+Title.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+Title.BorderSizePixel = 0
+Title.Size = UDim2.new(1, 0, 0, 25)
+Title.Font = Enum.Font.SourceSansBold
+Title.Text = "PET SIM 1 EXP"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 16
+
+ToggleBtn.Name = "ToggleBtn"
+ToggleBtn.Parent = MainFrame
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(60, 180, 60)
+ToggleBtn.BorderSizePixel = 0
+ToggleBtn.Position = UDim2.new(0.1, 0, 0.3, 0)
+ToggleBtn.Size = UDim2.new(0.8, 0, 0, 35)
+ToggleBtn.Font = Enum.Font.SourceSans
+ToggleBtn.Text = "ENCENDER"
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleBtn.TextSize = 18
+
+StatusLabel.Name = "StatusLabel"
+StatusLabel.Parent = MainFrame
+StatusLabel.BackgroundTransparency = 1
+StatusLabel.Position = UDim2.new(0, 0, 0.65, 0)
+StatusLabel.Size = UDim2.new(1, 0, 0, 20)
+StatusLabel.Font = Enum.Font.SourceSansItalic
+StatusLabel.Text = "Estado: Apagado"
+StatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+StatusLabel.TextSize = 14
+
+MinimizeBtn.Name = "MinimizeBtn"
+MinimizeBtn.Parent = MainFrame
+MinimizeBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+MinimizeBtn.BorderSizePixel = 0
+MinimizeBtn.Position = UDim2.new(0.75, -25, 0, 0)
+MinimizeBtn.Size = UDim2.new(0, 25, 0, 25)
+MinimizeBtn.Font = Enum.Font.SourceSansBold
+MinimizeBtn.Text = "-"
+MinimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+MinimizeBtn.TextSize = 20
+
+CloseBtn.Name = "CloseBtn"
+CloseBtn.Parent = MainFrame
+CloseBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
+CloseBtn.BorderSizePixel = 0
+CloseBtn.Position = UDim2.new(1, -25, 0, 0)
+CloseBtn.Size = UDim2.new(0, 25, 0, 25)
+CloseBtn.Font = Enum.Font.SourceSansBold
+CloseBtn.Text = "X"
+CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseBtn.TextSize = 18
+
+-- Lógica de Minimizar
+local minimized = false
+MinimizeBtn.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    if minimized then
+        MainFrame:TweenSize(UDim2.new(0, 180, 0, 25), "Out", "Quad", 0.3, true)
+        ToggleBtn.Visible = false
+        StatusLabel.Visible = false
+        MinimizeBtn.Text = "+"
+    else
+        MainFrame:TweenSize(UDim2.new(0, 180, 0, 130), "Out", "Quad", 0.3, true)
+        ToggleBtn.Visible = true
+        StatusLabel.Visible = true
+        MinimizeBtn.Text = "-"
     end
-    return Nexus.Hooks.OriginalNamecall(self, ...)
-end
+end)
 
---================================================================================
--- INTEGRACIÓN CON LIBRERÍA DE UI (RAYFIELD) - CORREGIDO
---================================================================================
+-- Lógica de Cerrar
+CloseBtn.MouseButton1Click:Connect(function()
+    _G.ExpFarmActive = false
+    ScreenGui:Destroy()
+end)
 
-function Nexus:LoadUILibrary()
-    local urls = {
-        -- URL Principal (Fuente común y estable)
-        "https://raw.githubusercontent.com/UI-Libraries/Rayfield/main/source.lua",
-        -- URL de Respaldo (del repositorio original, por si vuelve a estar activo)
-        "https://raw.githubusercontent.com/shlexware/Rayfield/main/source"
-    }
+-- Lógica de Farm de EXP
+local function StartExpFarm()
+    task.spawn(function()
+        while _G.ExpFarmActive do
+            if not Remotes then GetLibrary() end
+            
+            if Remotes and Remotes.Coins then
+                -- Buscamos monedas cercanas para "minar" y ganar EXP
+                local coinsFolder = workspace:FindFirstChild("__THINGS") and workspace.__THINGS:FindFirstChild("Coins")
+                if coinsFolder then
+                    local coins = coinsFolder:GetChildren()
+                    if #coins > 0 then
+                        -- Seleccionamos una moneda al azar o la más cercana
+                        local targetCoin = coins[math.random(1, #coins)]
+                        
+                        -- Obtenemos tus mascotas equipadas
+                        local myPets = {}
+                        -- En PS1 las mascotas suelen estar en una carpeta del jugador o en el workspace
+                        -- Intentamos encontrarlas por el nombre del jugador
+                        for _, v in pairs(workspace.__DEBRIS.Pets:GetChildren()) do
+                            if v.Name == LocalPlayer.Name or v:FindFirstChild(LocalPlayer.Name) then
+                                table.insert(myPets, v.Name)
+                            end
+                        end
+                        
+                        -- Si no encontramos mascotas en el workspace, intentamos vía Library
+                        if #myPets == 0 and Library and Library.GetEquippedPets then
+                            myPets = Library.GetEquippedPets()
+                        end
 
-    local success, library
-    for _, url in ipairs(urls) do
-        success, library = pcall(function()
-            return loadstring(game:HttpGet(url))()
-        end)
-        if success then
-            print("NexusSpy: Librería de UI cargada exitosamente desde:", url)
-            return library
-        else
-            warn("NexusSpy: Falló la carga desde", url, "- Intentando siguiente URL...")
-        end
-    end
-
-    warn("NexusSpy: ERROR CRÍTICO - No se pudo cargar la librería de UI desde ninguna fuente. La interfaz no estará disponible.")
-    return nil
-end
-
-
-function Nexus:CreateUI()
-    local Rayfield = self:LoadUILibrary()
-    if not Rayfield then
-        self:Shutdown() -- Desactivar el script si la UI no carga
-        return
-    end
-    self.UI = Rayfield
-
-    local Window = Rayfield:CreateWindow({
-        Name = "NexusSpy v2.1",
-        LoadingTitle = "NexusSpy Initializing...",
-        LoadingSubtitle = "by Manus",
-        ConfigurationSaving = { Enabled = true, FolderName = "NexusSpy", FileName = "Config" },
-        KeySystem = false
-    })
-
-    -- El resto de la creación de la UI...
-    local LoggerTab = Window:CreateTab("Logger", 4483362458)
-    local EventSection = LoggerTab:CreateSection("Event Log", true)
-    
-    self.UI.EventList = LoggerTab:CreateKeybind("Toggle UI", Enum.KeyCode.RightControl, function() Window:Toggle() end)
-    self.UI.ArgumentViewer = LoggerTab:CreateLabel("Selecciona un evento para ver sus argumentos.")
-    
-    local ActionsSection = LoggerTab:CreateSection("Actions", true)
-    ActionsSection:CreateButton("Re-Fire Event", function()
-        if self.SelectedEvent and self.SelectedEvent.Remote then
-            local remote = self.SelectedEvent.Remote
-            local args = self.SelectedEvent.Args
-            pcall(function()
-                if remote:IsA("RemoteEvent") then remote:FireServer(unpack(args, 1, args.n)) end
-                if remote:IsA("RemoteFunction") then remote:InvokeServer(unpack(args, 1, args.n)) end
-            end)
+                        -- Spameamos el evento de minado para ganar EXP
+                        for _, petId in pairs(myPets) do
+                            if not _G.ExpFarmActive then break end
+                            -- El evento "Mine" es el que otorga EXP al procesar el daño
+                            Remotes.Coins:FireServer("Mine", targetCoin.Name, petId)
+                        end
+                    end
+                end
+            end
+            task.wait(0.1) -- Pequeña espera para evitar lag excesivo
         end
     end)
-    ActionsSection:CreateButton("Copy Script", function()
-        if self.SelectedEvent then
-            local script = string.format("local remote = %s\n", SerializeValue(self.SelectedEvent.Remote))
-            local args = {}
-            for i = 1, self.SelectedEvent.Args.n do table.insert(args, SerializeValue(self.SelectedEvent.Args[i])) end
-            script = script .. string.format("remote:%s(%s)", self.SelectedEvent.Type == "Function" and "InvokeServer" or "FireServer", table.concat(args, ", "))
-            setclipboard(script)
-        end
-    end)
-    ActionsSection:CreateButton("Clear Log", function()
-        self.DisplayedEvents = {}
-        self.SelectedEvent = nil
-    end)
-
-    local BrowserTab = Window:CreateTab("Browser", 4483362458)
-    local BrowserSection = BrowserTab:CreateSection("Remote Browser", true)
-    self.UI.BrowserSearchBar = BrowserSection:CreateTextbox("Search", "", function(text) self:UpdateBrowserList(text) end)
-    self.UI.BrowserList = {}
-
-    local SettingsTab = Window:CreateTab("Settings", 4483362458)
-    SettingsTab:CreateToggle("Spy Enabled", "Activa o desactiva la captura de eventos", true, function(state) self.Enabled = state end)
 end
 
--- Las funciones de actualización de UI y Browser permanecen igual
-function Nexus:UpdateLoggerUI()
-    if #self.EventsQueue == 0 then return end
-    for _, entry in ipairs(self.EventsQueue) do
-        table.insert(self.DisplayedEvents, 1, entry)
+-- Lógica del Botón Toggle
+ToggleBtn.MouseButton1Click:Connect(function()
+    _G.ExpFarmActive = not _G.ExpFarmActive
+    if _G.ExpFarmActive then
+        ToggleBtn.Text = "APAGAR"
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
+        StatusLabel.Text = "Estado: FARMEANDO EXP..."
+        StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+        StartExpFarm()
+    else
+        ToggleBtn.Text = "ENCENDER"
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(60, 180, 60)
+        StatusLabel.Text = "Estado: Apagado"
+        StatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
     end
-    self.EventsQueue = {}
-    while #self.DisplayedEvents > 150 do table.remove(self.DisplayedEvents) end
-end
+end)
 
-function Nexus:UpdateBrowserList(query)
-    -- Lógica del navegador de remotos
-end
-
---================================================================================
--- INICIALIZACIÓN Y CICLO DE VIDA
---================================================================================
-
-function Nexus:Initialize()
-    self:CreateUI()
-    if not self.UI then return end -- No continuar si la UI falló
-
-    self.Hooks.OriginalNamecall = hookmetamethod(game, self.Hooks.Namecall)
-
-    local hbConnection = RunService.Heartbeat:Connect(function()
-        pcall(function() self:UpdateLoggerUI() end)
-    end)
-    table.insert(self.Connections, hbConnection)
-
-    print("NexusSpy v2.1 ha sido inicializado y está activo.")
-    print("Usa RightControl para mostrar/ocultar la UI. Para apagar, ejecuta: getgenv().Nexus:Shutdown()")
-end
-
-function Nexus:Shutdown()
-    if self.Hooks.OriginalNamecall then
-        setrawmetatable(game, {__namecall = self.Hooks.OriginalNamecall})
-    end
-    for _, conn in ipairs(self.Connections) do conn:Disconnect() end
-    self.Connections = {}
-    if self.UI then self.UI:Destroy() end
-    self.Enabled = false
-    if getgenv().Nexus then getgenv().Nexus = nil end
-    print("NexusSpy ha sido desactivado y limpiado completamente.")
-end
-
--- Inicializar y exponer en el entorno global
-getgenv().Nexus = Nexus
-Nexus:Initialize()
+print("Manus Pet Sim 1 Script Cargado con Éxito")
