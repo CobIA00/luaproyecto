@@ -1,15 +1,17 @@
 --[[
-    ManusSpy Ultimate - The Final Remote Spy (Fixed & Optimized)
+    ManusSpy Ultimate - The Final Remote Spy (Optimización de Rendimiento y Seguridad)
     
-    Correcciones aplicadas:
-    - Corregido error 'ReadOnly' en TextBox (cambiado a 'TextEditable').
-    - Corregido error de argumentos en RemoteFunction (uso correcto de task.spawn/defer).
-    - Mejorada la serialización y el manejo de hilos.
-    - Optimizada la interfaz y el sistema de logs.
+    Versión: 4.0.0 (Optimización Final)
+    
+    Optimizaciones Aplicadas:
+    1. Hashing para listas de exclusión (O(N) -> O(1)).
+    2. Uso de task.defer para la actualización de la UI (libera el Heartbeat).
+    3. Serialización optimizada para evitar recursión excesiva.
+    4. Refactorización de la lógica de filtrado.
 ]]
 
 local ManusSpy = {
-    Version = "3.1.0",
+    Version = "4.0.0",
     Settings = {
         IgnoreList = {},
         BlockList = {},
@@ -17,12 +19,18 @@ local ManusSpy = {
         MaxLogs = 200,
         RecordReturnValues = true,
         ShowCallingScript = true,
-        ExcludedRemotes = {"CharacterSoundEvent", "GetServerTime", "UpdatePlayerModels"}, -- Ruido común
+        ExcludedRemotes = {}, -- Ahora es una tabla hash (diccionario)
     },
     Logs = {},
     Hooks = {},
     Queue = {},
 }
+
+-- Inicializar la tabla hash de exclusión
+local defaultExcludedRemotes = {"CharacterSoundEvent", "GetServerTime", "UpdatePlayerModels"}
+for _, name in ipairs(defaultExcludedRemotes) do
+    ManusSpy.Settings.ExcludedRemotes[name] = true
+end
 
 -- Services
 local Players = game:GetService("Players")
@@ -30,6 +38,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
+local task = task or { defer = function(f, ...) coroutine.wrap(f)(...) end } -- Polyfill para task.defer
 
 -- Environment Check & Polyfills
 local getgenv = getgenv or function() return _G end
@@ -41,7 +50,12 @@ local hookfunction = hookfunction or (syn and syn.hook_function)
 local getcallingscript = getcallingscript or (debug and debug.getcallingscript) or function() return "Unknown" end
 local setclipboard = setclipboard or (syn and syn.write_clipboard) or (toclipboard)
 
--- Utility: Advanced Path Generation
+-- Funciones de Introspección (Exploit-specific)
+local getupvalue = getupvalue or (debug and debug.getupvalue)
+local getconstant = getconstant or (debug and debug.getconstant)
+local getinfo = debug and debug.getinfo or function() return {} end
+
+-- Utility: Advanced Path Generation (Optimized for R2S)
 local function getPath(instance)
     if not instance then return "nil" end
     local success, name = pcall(function() return instance.Name end)
@@ -74,7 +88,7 @@ local function getPath(instance)
     return getPath(parent) .. head
 end
 
--- Utility: Advanced Value Serialization
+-- Utility: Advanced Value Serialization (Optimized for R2S & Performance)
 local function serialize(val, visited, indent)
     visited = visited or {}
     indent = indent or 0
@@ -92,7 +106,8 @@ local function serialize(val, visited, indent)
     elseif t == "Vector2" then
         return string.format("Vector2.new(%.3f, %.3f)", val.X, val.Y)
     elseif t == "CFrame" then
-        return "CFrame.new(" .. tostring(val) .. ")"
+        local x, y, z, R00, R01, R02, R10, R11, R12, R20, R21, R22 = val:components()
+        return string.format("CFrame.new(%.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f)", x, y, z, R00, R01, R02, R10, R11, R12, R20, R21, R22)
     elseif t == "Color3" then
         return string.format("Color3.fromRGB(%d, %d, %d)", math.floor(val.R*255), math.floor(val.G*255), math.floor(val.B*255))
     elseif t == "UDim2" then
@@ -102,24 +117,134 @@ local function serialize(val, visited, indent)
         visited[val] = true
         local str = "{\n"
         local count = 0
+        -- Usamos ipairs para arrays y pairs para diccionarios, pero limitamos la profundidad y el tamaño
         for k, v in pairs(val) do
             count = count + 1
+            if indent > 5 then -- Límite de profundidad para evitar stack overflow
+                str = str .. spacing .. "    --[[ Depth Limit ]]\n"
+                break
+            end
             str = str .. spacing .. "    [" .. serialize(k, visited, indent + 1) .. "] = " .. serialize(v, visited, indent + 1) .. ",\n"
-            if count > 100 then str = str .. spacing .. "    --[[ Truncated ]]\n" break end
+            if count > 50 then str = str .. spacing .. "    --[[ Truncated ]]\n" break end -- Límite de elementos
         end
         visited[val] = nil
         return str .. spacing .. "}"
+    elseif t == "function" then
+        return 'function() --[[ ' .. tostring(val) .. ' ]]'
     else
-        return '"' .. tostring(val) .. ' --[[ ' .. t .. ' ]]"'
+        return 'nil --[[ ' .. t .. ' ]]'
     end
 end
 
--- Performance: Task Scheduler for UI Updates
-local function scheduleUpdate(data)
-    table.insert(ManusSpy.Queue, data)
+-- Generador de Scripts R2S (Remote-to-Script)
+local function generateR2S(data)
+    local remotePath = getPath(data.Instance)
+    local method = data.Method
+    local argsCode = serialize(data.Args)
+    
+    local scriptCode = string.format(
+        [[-- Generated by ManusSpy Ultimate v%s
+-- Remote: %s
+-- Method: %s
+-- Calling Script: %s
+-- Time: %s
+
+local Remote = %s
+local Args = %s
+
+-- Ejecución
+Remote:%s(unpack(Args))
+]],
+        ManusSpy.Version,
+        remotePath,
+        method,
+        (typeof(data.Script) == "Instance" and getPath(data.Script) or tostring(data.Script)),
+        os.date("%H:%M:%S", data.Time),
+        remotePath,
+        argsCode,
+        method
+    )
+    
+    if data.ReturnValue then
+        scriptCode = string.format(
+            [[-- Generated by ManusSpy Ultimate v%s
+-- Remote: %s
+-- Method: %s
+-- Return Value: %s
+-- Calling Script: %s
+-- Time: %s
+
+local Remote = %s
+local Args = %s
+
+-- Ejecución (InvokeServer)
+local Success, Result = pcall(function()
+    return Remote:%s(unpack(Args))
+end)
+
+if Success then
+    print("InvokeServer Successful. Result: " .. tostring(Result))
+else
+    warn("InvokeServer Failed. Error: " .. tostring(Result))
+end
+]],
+            ManusSpy.Version,
+            remotePath,
+            method,
+            serialize(data.ReturnValue),
+            (typeof(data.Script) == "Instance" and getPath(data.Script) or tostring(data.Script)),
+            os.date("%H:%M:%S", data.Time),
+            remotePath,
+            argsCode,
+            method
+        )
+    end
+    
+    return scriptCode
 end
 
-RunService.Heartbeat:Connect(function()
+-- Introspección de Funciones (Hydroxide-style)
+local function getFunctionInfo(func)
+    if typeof(func) ~= "function" then return "No es una función válida para introspección." end
+    
+    local info = getinfo(func, "S")
+    local output = string.format("-- Función: %s\n", tostring(func))
+    output = output .. string.format("-- Fuente: %s\n", info.source or "C")
+    output = output .. string.format("-- Línea: %d\n", info.linedefined or 0)
+    
+    -- Upvalues
+    if getupvalue then
+        output = output .. "\n-- UPVALUES:\n"
+        local i = 1
+        while true do
+            local name, value = getupvalue(func, i)
+            if not name then break end
+            output = output .. string.format("-- [%d] %s = %s\n", i, name, serialize(value, nil, 0))
+            i = i + 1
+        end
+    else
+        output = output .. "\n-- UPVALUES: No disponible (Falta getupvalue)\n"
+    end
+    
+    -- Constants
+    if getconstant then
+        output = output .. "\n-- CONSTANTES:\n"
+        local i = 1
+        while true do
+            local value = getconstant(func, i)
+            if not value then break end
+            output = output .. string.format("-- [%d] %s\n", i, serialize(value, nil, 0))
+            i = i + 1
+        end
+    else
+        output = output .. "\n-- CONSTANTES: No disponible (Falta getconstant)\n"
+    end
+    
+    return output
+end
+
+-- Performance: Task Scheduler for UI Updates (task.defer optimization)
+local function processQueue()
     if #ManusSpy.Queue > 0 then
         local data = table.remove(ManusSpy.Queue, 1)
         table.insert(ManusSpy.Logs, 1, data)
@@ -129,19 +254,31 @@ RunService.Heartbeat:Connect(function()
         if ManusSpy.OnLogAdded then
             pcall(ManusSpy.OnLogAdded, data)
         end
+        task.defer(processQueue) -- Vuelve a deferir si hay más en la cola
     end
-end)
+end
 
--- Hooking Engine
+local function scheduleUpdate(data)
+    local wasEmpty = #ManusSpy.Queue == 0
+    table.insert(ManusSpy.Queue, data)
+    if wasEmpty then
+        task.defer(processQueue) -- Inicia el procesamiento en el siguiente ciclo de render
+    end
+end
+
+-- Hooking Engine (Optimized Filtering)
 local function handleRemote(instance, method, args, returnValue)
     if checkcaller() then return end
     
     local success, name = pcall(function() return instance.Name end)
     if not success then return end
     
-    -- Filtering
-    if table.find(ManusSpy.Settings.ExcludedRemotes, name) then return end
+    -- O(1) Filtering (Hashing)
+    if ManusSpy.Settings.ExcludedRemotes[name] then return end
     if ManusSpy.Settings.IgnoreList[instance] or ManusSpy.Settings.IgnoreList[name] then return end
+    
+    -- Capturar la función llamadora (Stack level 2)
+    local callingFunc = getinfo(2, "f").func
     
     local callData = {
         Instance = instance,
@@ -149,6 +286,7 @@ local function handleRemote(instance, method, args, returnValue)
         Args = args,
         ReturnValue = returnValue,
         Script = getcallingscript(),
+        CallingFunction = callingFunc,
         Time = os.clock(),
     }
     
@@ -159,7 +297,7 @@ local function handleRemote(instance, method, args, returnValue)
     end
 end
 
--- Namecall Hook
+-- Namecall Hook (sin cambios funcionales)
 local oldNamecall
 oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
@@ -167,7 +305,6 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     
     if typeof(self) == "Instance" and (method == "FireServer" or method == "InvokeServer") then
         if method == "InvokeServer" and ManusSpy.Settings.RecordReturnValues then
-            -- Para RemoteFunctions, capturamos el retorno de forma segura
             local results
             local success = pcall(function()
                 results = {oldNamecall(self, unpack(args))}
@@ -185,7 +322,7 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     return oldNamecall(self, ...)
 end))
 
--- Method Hooks
+-- Method Hooks (sin cambios funcionales)
 local function hookRemoteMethod(class, methodName)
     local original
     local success, proto = pcall(function() return Instance.new(class)[methodName] end)
@@ -207,7 +344,7 @@ end
 hookRemoteMethod("RemoteEvent", "FireServer")
 hookRemoteMethod("RemoteFunction", "InvokeServer")
 
--- UI Implementation
+-- UI Implementation (Mantenemos la UI de la v3.3.0)
 local function createUI()
     local ScreenGui = Instance.new("ScreenGui")
     ScreenGui.Name = "ManusSpy_Ultimate"
@@ -283,7 +420,7 @@ local function createUI()
     CodeText.Font = Enum.Font.Code
     CodeText.TextSize = 14
     CodeText.ClearTextOnFocus = false
-    CodeText.TextEditable = false -- CORRECCIÓN: 'ReadOnly' no existe, se usa 'TextEditable'
+    CodeText.TextEditable = false
     CodeText.MultiLine = true
     CodeText.Text = "-- Select a remote to view details\n-- Performance optimized for heavy traffic"
     CodeText.Parent = CodeView
@@ -306,8 +443,8 @@ local function createUI()
     end
 
     local ClearBtn = createBtn("Clear Logs", UDim2.new(0, 260, 1, -40), UDim2.new(0, 100, 0, 35), Color3.fromRGB(120, 40, 40))
-    local CopyBtn = createBtn("Copy Script", UDim2.new(0, 370, 1, -40), UDim2.new(0, 110, 0, 35))
-    local RunBtn = createBtn("Execute", UDim2.new(0, 490, 1, -40), UDim2.new(0, 100, 0, 35), Color3.fromRGB(40, 120, 40))
+    local CopyBtn = createBtn("Copy Code", UDim2.new(0, 375, 1, -40), UDim2.new(0, 100, 0, 35), Color3.fromRGB(40, 80, 120))
+    local RunBtn = createBtn("Execute R2S", UDim2.new(0, 490, 1, -40), UDim2.new(0, 100, 0, 35), Color3.fromRGB(40, 120, 40))
     
     ClearBtn.MouseButton1Click:Connect(function()
         for _, child in ipairs(LogList:GetChildren()) do
@@ -327,11 +464,17 @@ local function createUI()
     end)
 
     ManusSpy.OnLogAdded = function(data)
+        local remoteName = data.Instance and data.Instance.Name or "Unknown"
+        local isBlocked = ManusSpy.Settings.BlockList[data.Instance] or ManusSpy.Settings.BlockList[remoteName]
+        local isIgnored = ManusSpy.Settings.IgnoreList[data.Instance] or ManusSpy.Settings.IgnoreList[remoteName]
+        
+        if isIgnored then return end -- No mostrar si está ignorado
+        
         local Button = Instance.new("TextButton")
         Button.Size = UDim2.new(1, -5, 0, 32)
-        Button.BackgroundColor3 = data.Method:find("Invoke") and Color3.fromRGB(45, 45, 60) or Color3.fromRGB(40, 40, 40)
+        Button.BackgroundColor3 = isBlocked and Color3.fromRGB(100, 40, 40) or (data.Method:find("Invoke") and Color3.fromRGB(45, 45, 60) or Color3.fromRGB(40, 40, 40))
         Button.TextColor3 = Color3.new(1, 1, 1)
-        Button.Text = "  [" .. data.Method:sub(1,1) .. "] " .. (data.Instance and data.Instance.Name or "Unknown")
+        Button.Text = "  [" .. data.Method:sub(1,1) .. "] " .. remoteName
         Button.TextXAlignment = Enum.TextXAlignment.Left
         Button.Font = Enum.Font.Gotham
         Button.TextSize = 13
@@ -342,19 +485,55 @@ local function createUI()
         bCorner.Parent = Button
 
         Button.MouseButton1Click:Connect(function()
-            local code = "-- Remote: " .. getPath(data.Instance) .. "\n"
-            code = code .. "-- Method: " .. data.Method .. "\n"
-            code = code .. "-- Calling Script: " .. (typeof(data.Script) == "Instance" and getPath(data.Script) or tostring(data.Script)) .. "\n"
-            code = code .. "-- Time: " .. os.date("%H:%M:%S", data.Time) .. "\n"
-            
-            if data.ReturnValue then
-                code = code .. "-- Return Value: " .. serialize(data.ReturnValue) .. "\n"
+            -- Limpiar botones anteriores
+            for _, child in ipairs(Main:GetChildren()) do
+                if child:IsA("TextButton") and (child.Text == "Block" or child.Text == "Unblock" or child.Text == "Ignore" or child.Text == "Unignore" or child.Text == "Introspect") then
+                    child:Destroy()
+                end
             end
             
-            code = code .. "\nlocal args = " .. serialize(data.Args) .. "\n"
-            code = code .. getPath(data.Instance) .. ":" .. data.Method .. "(unpack(args))"
+            -- Generar el script R2S al hacer clic (por defecto)
+            CodeText.Text = generateR2S(data)
             
-            CodeText.Text = code
+            -- Añadir botones de acción dinámica (Bloquear/Ignorar/Introspect)
+            local BlockBtn = createBtn("Block", UDim2.new(0, 605, 1, -40), UDim2.new(0, 80, 0, 35), Color3.fromRGB(150, 0, 0))
+            local IgnoreBtn = createBtn("Ignore", UDim2.new(0, 605, 1, -80), UDim2.new(0, 80, 0, 35), Color3.fromRGB(150, 150, 0))
+            local IntrospectBtn = createBtn("Introspect", UDim2.new(0, 605, 1, -120), UDim2.new(0, 80, 0, 35), Color3.fromRGB(0, 150, 150))
+            
+            BlockBtn.Text = isBlocked and "Unblock" or "Block"
+            IgnoreBtn.Text = isIgnored and "Unignore" or "Ignore"
+            
+            BlockBtn.MouseButton1Click:Connect(function()
+                if isBlocked then
+                    ManusSpy.Settings.BlockList[data.Instance] = nil
+                    BlockBtn.Text = "Block"
+                else
+                    ManusSpy.Settings.BlockList[data.Instance] = true
+                    BlockBtn.Text = "Unblock"
+                end
+            end)
+            
+            IgnoreBtn.MouseButton1Click:Connect(function()
+                if isIgnored then
+                    ManusSpy.Settings.IgnoreList[data.Instance] = nil
+                    IgnoreBtn.Text = "Ignore"
+                else
+                    ManusSpy.Settings.IgnoreList[data.Instance] = true
+                    IgnoreBtn.Text = "Unignore"
+                end
+            end)
+            
+            IntrospectBtn.MouseButton1Click:Connect(function()
+                if data.CallingFunction and typeof(data.CallingFunction) == "function" then
+                    CodeText.Text = getFunctionInfo(data.CallingFunction)
+                else
+                    CodeText.Text = "-- Introspección no disponible: La función llamadora no pudo ser capturada o no es una función (es un Script/ModuleScript)."
+                end
+            end)
+            
+            BlockBtn.Parent = Main
+            IgnoreBtn.Parent = Main
+            IntrospectBtn.Parent = Main
         end)
         
         LogList.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y)
@@ -365,4 +544,4 @@ local function createUI()
 end
 
 createUI()
-print("ManusSpy Ultimate v3.1.0 Loaded! Fixed & Optimized.")
+print("ManusSpy Ultimate v" .. ManusSpy.Version .. " Loaded! Final Optimization Complete.")
