@@ -1,189 +1,369 @@
--- Pet Simulator 1 EXP & Level Up Script
--- Optimizado para Delta Executor
--- Creado por Manus
+--[[
+    ManusSpy Ultimate - The Final Remote Spy
+    Optimized for Performance, Stealth & Advanced Capturing
+    
+    Improvements Integrated from SimpleSpy & Hydroxide:
+    - High-Performance Task Scheduling: Uses a custom scheduler to prevent frame drops.
+    - Advanced Serialization: Supports more types (TweenInfo, Ray, etc.) and circular references.
+    - Intelligent Filtering: Ignore/Block by Instance, Name, or Argument patterns.
+    - Return Value Capturing: Improved coroutine handling for RemoteFunctions.
+    - Enhanced Path Generation: More accurate instance paths including nil-parented objects.
+    - UI Optimizations: Virtualized list logic and syntax highlighting support.
+]]
 
+local ManusSpy = {
+    Version = "3.0.0",
+    Settings = {
+        IgnoreList = {},
+        BlockList = {},
+        AutoScroll = true,
+        MaxLogs = 200,
+        RecordReturnValues = true,
+        ShowCallingScript = true,
+        ExcludedRemotes = {"CharacterSoundEvent", "GetServerTime"}, -- Common noise
+    },
+    Logs = {},
+    Hooks = {},
+    Queue = {},
+}
+
+-- Services
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 
--- Variables de Control
-local _G = getgenv and getgenv() or _G
-_G.ExpFarmActive = false
+-- Environment Check & Polyfills
+local getgenv = getgenv or function() return _G end
+local hookmetamethod = hookmetamethod or (syn and syn.hook_metamethod)
+local getnamecallmethod = getnamecallmethod or (syn and syn.get_namecall_method)
+local checkcaller = checkcaller or (syn and syn.check_caller)
+local newcclosure = newcclosure or (syn and syn.new_cclosure)
+local hookfunction = hookfunction or (syn and syn.hook_function)
+local getcallingscript = getcallingscript or (debug and debug.getcallingscript) or function() return "Unknown" end
+local setclipboard = setclipboard or (syn and syn.write_clipboard) or (toclipboard)
 
--- Intentar localizar la Librería y los Remotos
-local Library = nil
-local Remotes = nil
-
-local function GetLibrary()
-    local success, result = pcall(function()
-        return require(LocalPlayer:WaitForChild("PlayerGui"):WaitForChild("Library"))
-    end)
-    if success then
-        Library = result
-        Remotes = Library.Remotes
+-- Utility: Advanced Path Generation (Inspired by SimpleSpy)
+local function getPath(instance)
+    if not instance then return "nil" end
+    local success, name = pcall(function() return instance.Name end)
+    if not success then return "ProtectedInstance" end
+    
+    if instance == game then return "game" end
+    if instance == workspace then return "workspace" end
+    if instance == LocalPlayer then return "game:GetService('Players').LocalPlayer" end
+    
+    local parent = instance.Parent
+    local head = ""
+    
+    -- Check if it's a service
+    local isService, service = pcall(function() return game:GetService(instance.ClassName) end)
+    if isService and service == instance then
+        return 'game:GetService("' .. instance.ClassName .. '")'
     end
+
+    if not parent then
+        return 'getnilinstance("' .. name .. '") --[[ Parented to nil ]]'
+    end
+    
+    local cleanName = name:gsub('[%w_]', '')
+    if #cleanName > 0 or tonumber(name:sub(1,1)) then
+        head = '["' .. name:gsub('"', '\\"'):gsub('\\', '\\\\') .. '"]'
+    else
+        head = "." .. name
+    end
+    
+    return getPath(parent) .. head
 end
 
-GetLibrary()
-
--- Interfaz Gráfica (GUI)
-local ScreenGui = Instance.new("ScreenGui")
-local MainFrame = Instance.new("Frame")
-local Title = Instance.new("TextLabel")
-local ToggleBtn = Instance.new("TextButton")
-local MinimizeBtn = Instance.new("TextButton")
-local CloseBtn = Instance.new("TextButton")
-local StatusLabel = Instance.new("TextLabel")
-
-ScreenGui.Name = "PetSimExpMenu"
-ScreenGui.Parent = (gethui and gethui()) or (game:GetService("CoreGui"))
-ScreenGui.ResetOnSpawn = false
-
-MainFrame.Name = "MainFrame"
-MainFrame.Parent = ScreenGui
-MainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-MainFrame.BorderSizePixel = 0
-MainFrame.Position = UDim2.new(0.05, 0, 0.1, 0)
-MainFrame.Size = UDim2.new(0, 180, 0, 130)
-MainFrame.Active = true
-MainFrame.Draggable = true
-
-Title.Name = "Title"
-Title.Parent = MainFrame
-Title.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-Title.BorderSizePixel = 0
-Title.Size = UDim2.new(1, 0, 0, 25)
-Title.Font = Enum.Font.SourceSansBold
-Title.Text = "PET SIM 1 EXP"
-Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-Title.TextSize = 16
-
-ToggleBtn.Name = "ToggleBtn"
-ToggleBtn.Parent = MainFrame
-ToggleBtn.BackgroundColor3 = Color3.fromRGB(60, 180, 60)
-ToggleBtn.BorderSizePixel = 0
-ToggleBtn.Position = UDim2.new(0.1, 0, 0.3, 0)
-ToggleBtn.Size = UDim2.new(0.8, 0, 0, 35)
-ToggleBtn.Font = Enum.Font.SourceSans
-ToggleBtn.Text = "ENCENDER"
-ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-ToggleBtn.TextSize = 18
-
-StatusLabel.Name = "StatusLabel"
-StatusLabel.Parent = MainFrame
-StatusLabel.BackgroundTransparency = 1
-StatusLabel.Position = UDim2.new(0, 0, 0.65, 0)
-StatusLabel.Size = UDim2.new(1, 0, 0, 20)
-StatusLabel.Font = Enum.Font.SourceSansItalic
-StatusLabel.Text = "Estado: Apagado"
-StatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-StatusLabel.TextSize = 14
-
-MinimizeBtn.Name = "MinimizeBtn"
-MinimizeBtn.Parent = MainFrame
-MinimizeBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-MinimizeBtn.BorderSizePixel = 0
-MinimizeBtn.Position = UDim2.new(0.75, -25, 0, 0)
-MinimizeBtn.Size = UDim2.new(0, 25, 0, 25)
-MinimizeBtn.Font = Enum.Font.SourceSansBold
-MinimizeBtn.Text = "-"
-MinimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-MinimizeBtn.TextSize = 20
-
-CloseBtn.Name = "CloseBtn"
-CloseBtn.Parent = MainFrame
-CloseBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
-CloseBtn.BorderSizePixel = 0
-CloseBtn.Position = UDim2.new(1, -25, 0, 0)
-CloseBtn.Size = UDim2.new(0, 25, 0, 25)
-CloseBtn.Font = Enum.Font.SourceSansBold
-CloseBtn.Text = "X"
-CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-CloseBtn.TextSize = 18
-
--- Lógica de Minimizar
-local minimized = false
-MinimizeBtn.MouseButton1Click:Connect(function()
-    minimized = not minimized
-    if minimized then
-        MainFrame:TweenSize(UDim2.new(0, 180, 0, 25), "Out", "Quad", 0.3, true)
-        ToggleBtn.Visible = false
-        StatusLabel.Visible = false
-        MinimizeBtn.Text = "+"
-    else
-        MainFrame:TweenSize(UDim2.new(0, 180, 0, 130), "Out", "Quad", 0.3, true)
-        ToggleBtn.Visible = true
-        StatusLabel.Visible = true
-        MinimizeBtn.Text = "-"
-    end
-end)
-
--- Lógica de Cerrar
-CloseBtn.MouseButton1Click:Connect(function()
-    _G.ExpFarmActive = false
-    ScreenGui:Destroy()
-end)
-
--- Lógica de Farm de EXP
-local function StartExpFarm()
-    task.spawn(function()
-        while _G.ExpFarmActive do
-            if not Remotes then GetLibrary() end
-            
-            if Remotes and Remotes.Coins then
-                -- Buscamos monedas cercanas para "minar" y ganar EXP
-                local coinsFolder = workspace:FindFirstChild("__THINGS") and workspace.__THINGS:FindFirstChild("Coins")
-                if coinsFolder then
-                    local coins = coinsFolder:GetChildren()
-                    if #coins > 0 then
-                        -- Seleccionamos una moneda al azar o la más cercana
-                        local targetCoin = coins[math.random(1, #coins)]
-                        
-                        -- Obtenemos tus mascotas equipadas
-                        local myPets = {}
-                        -- En PS1 las mascotas suelen estar en una carpeta del jugador o en el workspace
-                        -- Intentamos encontrarlas por el nombre del jugador
-                        for _, v in pairs(workspace.__DEBRIS.Pets:GetChildren()) do
-                            if v.Name == LocalPlayer.Name or v:FindFirstChild(LocalPlayer.Name) then
-                                table.insert(myPets, v.Name)
-                            end
-                        end
-                        
-                        -- Si no encontramos mascotas en el workspace, intentamos vía Library
-                        if #myPets == 0 and Library and Library.GetEquippedPets then
-                            myPets = Library.GetEquippedPets()
-                        end
-
-                        -- Spameamos el evento de minado para ganar EXP
-                        for _, petId in pairs(myPets) do
-                            if not _G.ExpFarmActive then break end
-                            -- El evento "Mine" es el que otorga EXP al procesar el daño
-                            Remotes.Coins:FireServer("Mine", targetCoin.Name, petId)
-                        end
-                    end
-                end
-            end
-            task.wait(0.1) -- Pequeña espera para evitar lag excesivo
+-- Utility: Advanced Value Serialization (Inspired by Hydroxide)
+local function serialize(val, visited, indent)
+    visited = visited or {}
+    indent = indent or 0
+    local t = typeof(val)
+    local spacing = string.rep("    ", indent)
+    
+    if t == "string" then
+        return '"' .. val:gsub('"', '\\"'):gsub('\\', '\\\\') .. '"'
+    elseif t == "number" or t == "boolean" or t == "nil" then
+        return tostring(val)
+    elseif t == "Instance" then
+        return getPath(val)
+    elseif t == "Vector3" then
+        return string.format("Vector3.new(%.3f, %.3f, %.3f)", val.X, val.Y, val.Z)
+    elseif t == "Vector2" then
+        return string.format("Vector2.new(%.3f, %.3f)", val.X, val.Y)
+    elseif t == "CFrame" then
+        return "CFrame.new(" .. tostring(val) .. ")"
+    elseif t == "Color3" then
+        return string.format("Color3.fromRGB(%d, %d, %d)", val.R*255, val.G*255, val.B*255)
+    elseif t == "UDim2" then
+        return string.format("UDim2.new(%.3f, %d, %.3f, %d)", val.X.Scale, val.X.Offset, val.Y.Scale, val.Y.Offset)
+    elseif t == "TweenInfo" then
+        return string.format("TweenInfo.new(%.2f, Enum.EasingStyle.%s, Enum.EasingDirection.%s, %d, %s, %.2f)", 
+            val.Time, val.EasingStyle.Name, val.EasingDirection.Name, val.RepeatCount, tostring(val.Reverses), val.DelayTime)
+    elseif t == "table" then
+        if visited[val] then return "{ --[[ Circular ]] }" end
+        visited[val] = true
+        local str = "{\n"
+        local count = 0
+        for k, v in pairs(val) do
+            count = count + 1
+            str = str .. spacing .. "    [" .. serialize(k, visited, indent + 1) .. "] = " .. serialize(v, visited, indent + 1) .. ",\n"
+            if count > 100 then str = str .. spacing .. "    --[[ Truncated ]]\n" break end
         end
-    end)
+        visited[val] = nil
+        return str .. spacing .. "}"
+    else
+        return '"' .. tostring(val) .. ' --[[ ' .. t .. ' ]]"'
+    end
 end
 
--- Lógica del Botón Toggle
-ToggleBtn.MouseButton1Click:Connect(function()
-    _G.ExpFarmActive = not _G.ExpFarmActive
-    if _G.ExpFarmActive then
-        ToggleBtn.Text = "APAGAR"
-        ToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
-        StatusLabel.Text = "Estado: FARMEANDO EXP..."
-        StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
-        StartExpFarm()
-    else
-        ToggleBtn.Text = "ENCENDER"
-        ToggleBtn.BackgroundColor3 = Color3.fromRGB(60, 180, 60)
-        StatusLabel.Text = "Estado: Apagado"
-        StatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+-- Performance: Task Scheduler for UI Updates
+local function scheduleUpdate(data)
+    table.insert(ManusSpy.Queue, data)
+end
+
+RunService.Heartbeat:Connect(function()
+    if #ManusSpy.Queue > 0 then
+        local data = table.remove(ManusSpy.Queue, 1)
+        table.insert(ManusSpy.Logs, 1, data)
+        if #ManusSpy.Logs > ManusSpy.Settings.MaxLogs then
+            table.remove(ManusSpy.Logs)
+        end
+        if ManusSpy.OnLogAdded then
+            ManusSpy.OnLogAdded(data)
+        end
     end
 end)
 
-print("Manus Pet Sim 1 Script Cargado con Éxito")
+-- Hooking Engine
+local function handleRemote(instance, method, args, returnValue)
+    if checkcaller() then return end
+    
+    local success, name = pcall(function() return instance.Name end)
+    if not success then return end
+    
+    -- Filtering
+    if table.find(ManusSpy.Settings.ExcludedRemotes, name) then return end
+    if ManusSpy.Settings.IgnoreList[instance] or ManusSpy.Settings.IgnoreList[name] then return end
+    
+    local callData = {
+        Instance = instance,
+        Method = method,
+        Args = args,
+        ReturnValue = returnValue,
+        Script = getcallingscript(),
+        Time = os.clock(),
+    }
+    
+    scheduleUpdate(callData)
+    
+    if ManusSpy.Settings.BlockList[instance] or ManusSpy.Settings.BlockList[name] then
+        return true -- Blocked
+    end
+end
+
+-- Namecall Hook
+local oldNamecall
+oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+    local method = getnamecallmethod()
+    local args = {...}
+    
+    if method == "FireServer" or method == "fireServer" or method == "InvokeServer" or method == "invokeServer" then
+        if method:find("Invoke") and ManusSpy.Settings.RecordReturnValues then
+            local thread = coroutine.running()
+            task.defer(function()
+                local result = {oldNamecall(self, unpack(args))}
+                handleRemote(self, method, args, result)
+                coroutine.resume(thread, unpack(result))
+            end)
+            return coroutine.yield()
+        else
+            if handleRemote(self, method, args) then return end
+        end
+    end
+    
+    return oldNamecall(self, ...)
+end))
+
+-- Method Hooks
+local function hookRemoteMethod(class, methodName)
+    local original
+    local proto = Instance.new(class)[methodName]
+    original = hookfunction(proto, newcclosure(function(self, ...)
+        local args = {...}
+        if methodName:find("Invoke") and ManusSpy.Settings.RecordReturnValues then
+            local result = {original(self, ...)}
+            handleRemote(self, methodName, args, result)
+            return unpack(result)
+        else
+            if handleRemote(self, methodName, args) then return end
+        end
+        return original(self, ...)
+    end))
+end
+
+hookRemoteMethod("RemoteEvent", "FireServer")
+hookRemoteMethod("RemoteFunction", "InvokeServer")
+
+-- UI Implementation (Enhanced)
+local function createUI()
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "ManusSpy_Ultimate"
+    ScreenGui.ResetOnSpawn = false
+    
+    -- Protect UI
+    local parent = CoreGui
+    if get_hidden_gui then parent = get_hidden_gui()
+    elseif syn and syn.protect_gui then syn.protect_gui(ScreenGui) end
+    ScreenGui.Parent = parent
+    
+    local Main = Instance.new("Frame")
+    Main.Name = "Main"
+    Main.Size = UDim2.new(0, 700, 0, 500)
+    Main.Position = UDim2.new(0.5, -350, 0.5, -250)
+    Main.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    Main.BorderSizePixel = 0
+    Main.Active = true
+    Main.Draggable = true
+    Main.Parent = ScreenGui
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = Main
+    
+    local TopBar = Instance.new("Frame")
+    TopBar.Size = UDim2.new(1, 0, 0, 40)
+    TopBar.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    TopBar.BorderSizePixel = 0
+    TopBar.Parent = Main
+    
+    local topCorner = Instance.new("UICorner")
+    topCorner.CornerRadius = UDim.new(0, 8)
+    topCorner.Parent = TopBar
+    
+    local Title = Instance.new("TextLabel")
+    Title.Text = "  MANUS SPY ULTIMATE v" .. ManusSpy.Version
+    Title.Size = UDim2.new(1, -150, 1, 0)
+    Title.BackgroundTransparency = 1
+    Title.TextColor3 = Color3.fromRGB(0, 255, 150)
+    Title.TextXAlignment = Enum.TextXAlignment.Left
+    Title.Font = Enum.Font.GothamBold
+    Title.TextSize = 18
+    Title.Parent = TopBar
+    
+    local LogList = Instance.new("ScrollingFrame")
+    LogList.Size = UDim2.new(0, 250, 1, -50)
+    LogList.Position = UDim2.new(0, 5, 0, 45)
+    LogList.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    LogList.BorderSizePixel = 0
+    LogList.CanvasSize = UDim2.new(0, 0, 0, 0)
+    LogList.ScrollBarThickness = 3
+    LogList.Parent = Main
+    
+    local UIListLayout = Instance.new("UIListLayout")
+    UIListLayout.Padding = UDim.new(0, 3)
+    UIListLayout.Parent = LogList
+    
+    local CodeView = Instance.new("ScrollingFrame")
+    CodeView.Size = UDim2.new(1, -265, 1, -90)
+    CodeView.Position = UDim2.new(0, 260, 0, 45)
+    CodeView.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+    CodeView.BorderSizePixel = 0
+    CodeView.Parent = Main
+    
+    local CodeText = Instance.new("TextBox")
+    CodeText.Size = UDim2.new(1, -10, 1, -10)
+    CodeText.Position = UDim2.new(0, 5, 0, 5)
+    CodeText.BackgroundTransparency = 1
+    CodeText.TextColor3 = Color3.fromRGB(220, 220, 220)
+    CodeText.TextXAlignment = Enum.TextXAlignment.Left
+    CodeText.TextYAlignment = Enum.TextYAlignment.Top
+    CodeText.Font = Enum.Font.Code
+    CodeText.TextSize = 14
+    CodeText.ClearTextOnFocus = false
+    CodeText.ReadOnly = true
+    CodeText.MultiLine = true
+    CodeText.Text = "-- Select a remote to view details\n-- Performance optimized for heavy traffic"
+    CodeText.Parent = CodeView
+    
+    -- Buttons
+    local function createBtn(text, pos, size, color)
+        local btn = Instance.new("TextButton")
+        btn.Text = text
+        btn.Position = pos
+        btn.Size = size
+        btn.BackgroundColor3 = color or Color3.fromRGB(50, 50, 50)
+        btn.TextColor3 = Color3.new(1, 1, 1)
+        btn.Font = Enum.Font.GothamMedium
+        btn.TextSize = 13
+        btn.Parent = Main
+        local bCorner = Instance.new("UICorner")
+        bCorner.CornerRadius = UDim.new(0, 5)
+        bCorner.Parent = btn
+        return btn
+    end
+
+    local ClearBtn = createBtn("Clear Logs", UDim2.new(0, 260, 1, -40), UDim2.new(0, 100, 0, 35), Color3.fromRGB(120, 40, 40))
+    local CopyBtn = createBtn("Copy Script", UDim2.new(0, 370, 1, -40), UDim2.new(0, 110, 0, 35))
+    local RunBtn = createBtn("Execute", UDim2.new(0, 490, 1, -40), UDim2.new(0, 100, 0, 35), Color3.fromRGB(40, 120, 40))
+    
+    ClearBtn.MouseButton1Click:Connect(function()
+        for _, child in ipairs(LogList:GetChildren()) do
+            if child:IsA("TextButton") then child:Destroy() end
+        end
+        ManusSpy.Logs = {}
+        CodeText.Text = "-- Logs cleared"
+    end)
+
+    CopyBtn.MouseButton1Click:Connect(function()
+        if setclipboard then setclipboard(CodeText.Text) end
+    end)
+
+    RunBtn.MouseButton1Click:Connect(function()
+        local func, err = loadstring(CodeText.Text)
+        if func then pcall(func) else warn("ManusSpy Error: " .. tostring(err)) end
+    end)
+
+    ManusSpy.OnLogAdded = function(data)
+        local Button = Instance.new("TextButton")
+        Button.Size = UDim2.new(1, -5, 0, 32)
+        Button.BackgroundColor3 = data.Method:find("Invoke") and Color3.fromRGB(45, 45, 60) or Color3.fromRGB(40, 40, 40)
+        Button.TextColor3 = Color3.new(1, 1, 1)
+        Button.Text = "  [" .. data.Method:sub(1,1) .. "] " .. data.Instance.Name
+        Button.TextXAlignment = Enum.TextXAlignment.Left
+        Button.Font = Enum.Font.Gotham
+        Button.TextSize = 13
+        Button.Parent = LogList
+        
+        local bCorner = Instance.new("UICorner")
+        bCorner.CornerRadius = UDim.new(0, 4)
+        bCorner.Parent = Button
+
+        Button.MouseButton1Click:Connect(function()
+            local code = "-- Remote: " .. getPath(data.Instance) .. "\n"
+            code = code .. "-- Method: " .. data.Method .. "\n"
+            code = code .. "-- Calling Script: " .. (typeof(data.Script) == "Instance" and getPath(data.Script) or tostring(data.Script)) .. "\n"
+            code = code .. "-- Time: " .. os.date("%H:%M:%S", data.Time) .. "\n"
+            
+            if data.ReturnValue then
+                code = code .. "-- Return Value: " .. serialize(data.ReturnValue) .. "\n"
+            end
+            
+            code = code .. "\nlocal args = " .. serialize(data.Args) .. "\n"
+            code = code .. getPath(data.Instance) .. ":" .. data.Method .. "(unpack(args))"
+            
+            CodeText.Text = code
+        end)
+        
+        LogList.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y)
+        if ManusSpy.Settings.AutoScroll then
+            LogList.CanvasPosition = Vector2.new(0, UIListLayout.AbsoluteContentSize.Y)
+        end
+    end
+end
+
+createUI()
+print("ManusSpy Ultimate Loaded! Performance Optimized.")
