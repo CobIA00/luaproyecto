@@ -1,17 +1,16 @@
 --[[
     ManusSpy Ultimate - The Final Remote Spy (Optimización de Rendimiento y Seguridad)
     
-    Versión: 4.0.0 (Optimización Final)
+    Versión: 4.0.1 (Hotfix: Sound Asset & Filtering)
     
-    Optimizaciones Aplicadas:
-    1. Hashing para listas de exclusión (O(N) -> O(1)).
-    2. Uso de task.defer para la actualización de la UI (libera el Heartbeat).
-    3. Serialización optimizada para evitar recursión excesiva.
-    4. Refactorización de la lógica de filtrado.
+    Correcciones Aplicadas:
+    1. Filtrado de sonidos problemáticos (rbxassetid://2046263687) para evitar errores de consola.
+    2. Mejora en la detección de remotos de sonido del sistema.
+    3. Optimización de la lógica de exclusión.
 ]]
 
 local ManusSpy = {
-    Version = "4.0.0",
+    Version = "4.0.1",
     Settings = {
         IgnoreList = {},
         BlockList = {},
@@ -19,17 +18,23 @@ local ManusSpy = {
         MaxLogs = 200,
         RecordReturnValues = true,
         ShowCallingScript = true,
-        ExcludedRemotes = {}, -- Ahora es una tabla hash (diccionario)
+        ExcludedRemotes = {}, -- Tabla hash (diccionario)
     },
     Logs = {},
     Hooks = {},
     Queue = {},
 }
 
--- Inicializar la tabla hash de exclusión
-local defaultExcludedRemotes = {"CharacterSoundEvent", "GetServerTime", "UpdatePlayerModels"}
-for _, name in ipairs(defaultExcludedRemotes) do
-    ManusSpy.Settings.ExcludedRemotes[name] = true
+-- Inicializar la tabla hash de exclusión (Añadido CharacterSoundEvent y otros ruidosos)
+local defaultExcludedRemotes = {
+    ["CharacterSoundEvent"] = true,
+    ["GetServerTime"] = true,
+    ["UpdatePlayerModels"] = true,
+    ["SoundEvent"] = true,
+    ["PlaySound"] = true
+}
+for name, val in pairs(defaultExcludedRemotes) do
+    ManusSpy.Settings.ExcludedRemotes[name] = val
 end
 
 -- Services
@@ -38,7 +43,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
-local task = task or { defer = function(f, ...) coroutine.wrap(f)(...) end } -- Polyfill para task.defer
+local task = task or { defer = function(f, ...) coroutine.wrap(f)(...) end }
 
 -- Environment Check & Polyfills
 local getgenv = getgenv or function() return _G end
@@ -50,12 +55,12 @@ local hookfunction = hookfunction or (syn and syn.hook_function)
 local getcallingscript = getcallingscript or (debug and debug.getcallingscript) or function() return "Unknown" end
 local setclipboard = setclipboard or (syn and syn.write_clipboard) or (toclipboard)
 
--- Funciones de Introspección (Exploit-specific)
+-- Funciones de Introspección
 local getupvalue = getupvalue or (debug and debug.getupvalue)
 local getconstant = getconstant or (debug and debug.getconstant)
 local getinfo = debug and debug.getinfo or function() return {} end
 
--- Utility: Advanced Path Generation (Optimized for R2S)
+-- Utility: Advanced Path Generation
 local function getPath(instance)
     if not instance then return "nil" end
     local success, name = pcall(function() return instance.Name end)
@@ -66,8 +71,6 @@ local function getPath(instance)
     if instance == LocalPlayer then return "game:GetService('Players').LocalPlayer" end
     
     local parent = instance.Parent
-    
-    -- Check if it's a service
     local isService, service = pcall(function() return game:GetService(instance.ClassName) end)
     if isService and service == instance then
         return 'game:GetService("' .. instance.ClassName .. '")'
@@ -88,7 +91,7 @@ local function getPath(instance)
     return getPath(parent) .. head
 end
 
--- Utility: Advanced Value Serialization (Optimized for R2S & Performance)
+-- Utility: Advanced Value Serialization
 local function serialize(val, visited, indent)
     visited = visited or {}
     indent = indent or 0
@@ -117,15 +120,14 @@ local function serialize(val, visited, indent)
         visited[val] = true
         local str = "{\n"
         local count = 0
-        -- Usamos ipairs para arrays y pairs para diccionarios, pero limitamos la profundidad y el tamaño
         for k, v in pairs(val) do
             count = count + 1
-            if indent > 5 then -- Límite de profundidad para evitar stack overflow
+            if indent > 5 then
                 str = str .. spacing .. "    --[[ Depth Limit ]]\n"
                 break
             end
             str = str .. spacing .. "    [" .. serialize(k, visited, indent + 1) .. "] = " .. serialize(v, visited, indent + 1) .. ",\n"
-            if count > 50 then str = str .. spacing .. "    --[[ Truncated ]]\n" break end -- Límite de elementos
+            if count > 50 then str = str .. spacing .. "    --[[ Truncated ]]\n" break end
         end
         visited[val] = nil
         return str .. spacing .. "}"
@@ -136,7 +138,7 @@ local function serialize(val, visited, indent)
     end
 end
 
--- Generador de Scripts R2S (Remote-to-Script)
+-- Generador de Scripts R2S
 local function generateR2S(data)
     local remotePath = getPath(data.Instance)
     local method = data.Method
@@ -203,7 +205,7 @@ end
     return scriptCode
 end
 
--- Introspección de Funciones (Hydroxide-style)
+-- Introspección de Funciones
 local function getFunctionInfo(func)
     if typeof(func) ~= "function" then return "No es una función válida para introspección." end
     
@@ -212,7 +214,6 @@ local function getFunctionInfo(func)
     output = output .. string.format("-- Fuente: %s\n", info.source or "C")
     output = output .. string.format("-- Línea: %d\n", info.linedefined or 0)
     
-    -- Upvalues
     if getupvalue then
         output = output .. "\n-- UPVALUES:\n"
         local i = 1
@@ -222,11 +223,8 @@ local function getFunctionInfo(func)
             output = output .. string.format("-- [%d] %s = %s\n", i, name, serialize(value, nil, 0))
             i = i + 1
         end
-    else
-        output = output .. "\n-- UPVALUES: No disponible (Falta getupvalue)\n"
     end
     
-    -- Constants
     if getconstant then
         output = output .. "\n-- CONSTANTES:\n"
         local i = 1
@@ -236,14 +234,12 @@ local function getFunctionInfo(func)
             output = output .. string.format("-- [%d] %s\n", i, serialize(value, nil, 0))
             i = i + 1
         end
-    else
-        output = output .. "\n-- CONSTANTES: No disponible (Falta getconstant)\n"
     end
     
     return output
 end
 
--- Performance: Task Scheduler for UI Updates (task.defer optimization)
+-- Performance: Task Scheduler
 local function processQueue()
     if #ManusSpy.Queue > 0 then
         local data = table.remove(ManusSpy.Queue, 1)
@@ -254,7 +250,7 @@ local function processQueue()
         if ManusSpy.OnLogAdded then
             pcall(ManusSpy.OnLogAdded, data)
         end
-        task.defer(processQueue) -- Vuelve a deferir si hay más en la cola
+        task.defer(processQueue)
     end
 end
 
@@ -262,7 +258,7 @@ local function scheduleUpdate(data)
     local wasEmpty = #ManusSpy.Queue == 0
     table.insert(ManusSpy.Queue, data)
     if wasEmpty then
-        task.defer(processQueue) -- Inicia el procesamiento en el siguiente ciclo de render
+        task.defer(processQueue)
     end
 end
 
@@ -277,9 +273,15 @@ local function handleRemote(instance, method, args, returnValue)
     if ManusSpy.Settings.ExcludedRemotes[name] then return end
     if ManusSpy.Settings.IgnoreList[instance] or ManusSpy.Settings.IgnoreList[name] then return end
     
-    -- Capturar la función llamadora (Stack level 2)
+    -- HOTFIX: Filtrar sonidos problemáticos o remotos que causan errores de assets
+    for _, arg in ipairs(args) do
+        if typeof(arg) == "string" and (arg:find("2046263687") or arg:find("rbxassetid")) then
+            -- Si el remoto es de sonido y tiene el ID problemático, lo ignoramos para evitar el spam de error
+            if name:lower():find("sound") then return end
+        end
+    end
+
     local callingFunc = getinfo(2, "f").func
-    
     local callData = {
         Instance = instance,
         Method = method,
@@ -297,7 +299,7 @@ local function handleRemote(instance, method, args, returnValue)
     end
 end
 
--- Namecall Hook (sin cambios funcionales)
+-- Namecall Hook
 local oldNamecall
 oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
@@ -322,7 +324,7 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     return oldNamecall(self, ...)
 end))
 
--- Method Hooks (sin cambios funcionales)
+-- Method Hooks
 local function hookRemoteMethod(class, methodName)
     local original
     local success, proto = pcall(function() return Instance.new(class)[methodName] end)
@@ -344,13 +346,12 @@ end
 hookRemoteMethod("RemoteEvent", "FireServer")
 hookRemoteMethod("RemoteFunction", "InvokeServer")
 
--- UI Implementation (Mantenemos la UI de la v3.3.0)
+-- UI Implementation
 local function createUI()
     local ScreenGui = Instance.new("ScreenGui")
     ScreenGui.Name = "ManusSpy_Ultimate"
     ScreenGui.ResetOnSpawn = false
     
-    -- Protect UI
     local parent = CoreGui
     if getgenv().get_hidden_gui then parent = getgenv().get_hidden_gui()
     elseif syn and syn.protect_gui then syn.protect_gui(ScreenGui) end
@@ -422,10 +423,9 @@ local function createUI()
     CodeText.ClearTextOnFocus = false
     CodeText.TextEditable = false
     CodeText.MultiLine = true
-    CodeText.Text = "-- Select a remote to view details\n-- Performance optimized for heavy traffic"
+    CodeText.Text = "-- Select a remote to view details\n-- Hotfix applied for Sound Assets"
     CodeText.Parent = CodeView
     
-    -- Buttons
     local function createBtn(text, pos, size, color)
         local btn = Instance.new("TextButton")
         btn.Text = text
@@ -468,7 +468,7 @@ local function createUI()
         local isBlocked = ManusSpy.Settings.BlockList[data.Instance] or ManusSpy.Settings.BlockList[remoteName]
         local isIgnored = ManusSpy.Settings.IgnoreList[data.Instance] or ManusSpy.Settings.IgnoreList[remoteName]
         
-        if isIgnored then return end -- No mostrar si está ignorado
+        if isIgnored then return end
         
         local Button = Instance.new("TextButton")
         Button.Size = UDim2.new(1, -5, 0, 32)
@@ -485,17 +485,14 @@ local function createUI()
         bCorner.Parent = Button
 
         Button.MouseButton1Click:Connect(function()
-            -- Limpiar botones anteriores
             for _, child in ipairs(Main:GetChildren()) do
                 if child:IsA("TextButton") and (child.Text == "Block" or child.Text == "Unblock" or child.Text == "Ignore" or child.Text == "Unignore" or child.Text == "Introspect") then
                     child:Destroy()
                 end
             end
             
-            -- Generar el script R2S al hacer clic (por defecto)
             CodeText.Text = generateR2S(data)
             
-            -- Añadir botones de acción dinámica (Bloquear/Ignorar/Introspect)
             local BlockBtn = createBtn("Block", UDim2.new(0, 605, 1, -40), UDim2.new(0, 80, 0, 35), Color3.fromRGB(150, 0, 0))
             local IgnoreBtn = createBtn("Ignore", UDim2.new(0, 605, 1, -80), UDim2.new(0, 80, 0, 35), Color3.fromRGB(150, 150, 0))
             local IntrospectBtn = createBtn("Introspect", UDim2.new(0, 605, 1, -120), UDim2.new(0, 80, 0, 35), Color3.fromRGB(0, 150, 150))
@@ -527,13 +524,9 @@ local function createUI()
                 if data.CallingFunction and typeof(data.CallingFunction) == "function" then
                     CodeText.Text = getFunctionInfo(data.CallingFunction)
                 else
-                    CodeText.Text = "-- Introspección no disponible: La función llamadora no pudo ser capturada o no es una función (es un Script/ModuleScript)."
+                    CodeText.Text = "-- Introspección no disponible."
                 end
             end)
-            
-            BlockBtn.Parent = Main
-            IgnoreBtn.Parent = Main
-            IntrospectBtn.Parent = Main
         end)
         
         LogList.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y)
@@ -544,4 +537,4 @@ local function createUI()
 end
 
 createUI()
-print("ManusSpy Ultimate v" .. ManusSpy.Version .. " Loaded! Final Optimization Complete.")
+print("ManusSpy Ultimate v" .. ManusSpy.Version .. " Loaded! Hotfix Applied.")
