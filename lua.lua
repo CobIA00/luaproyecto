@@ -47,13 +47,13 @@ local task = task or { defer = function(f, ...) coroutine.wrap(f)(...) end }
 
 -- Environment Check & Polyfills
 local getgenv = getgenv or function() return _G end
-local hookmetamethod = hookmetamethod or (syn and syn.hook_metamethod)
-local getnamecallmethod = getnamecallmethod or (syn and syn.get_namecall_method)
-local checkcaller = checkcaller or (syn and syn.check_caller)
-local newcclosure = newcclosure or (syn and syn.new_cclosure)
-local hookfunction = hookfunction or (syn and syn.hook_function)
+local hookmetamethod = hookmetamethod or (syn and syn.hook_metamethod) or (fluxus and fluxus.hook_metamethod)
+local getnamecallmethod = getnamecallmethod or (syn and syn.get_namecall_method) or (fluxus and fluxus.get_namecall_method)
+local checkcaller = checkcaller or (syn and syn.check_caller) or (fluxus and fluxus.check_caller)
+local newcclosure = newcclosure or (syn and syn.new_cclosure) or (fluxus and fluxus.new_cclosure)
+local hookfunction = hookfunction or (syn and syn.hook_function) or (fluxus and fluxus.hook_function)
 local getcallingscript = getcallingscript or (debug and debug.getcallingscript) or function() return "Unknown" end
-local setclipboard = setclipboard or (syn and syn.write_clipboard) or (toclipboard)
+local setclipboard = setclipboard or (syn and syn.write_clipboard) or (toclipboard) or (fluxus and fluxus.set_clipboard)
 
 -- Funciones de Introspección
 local getupvalue = getupvalue or (debug and debug.getupvalue)
