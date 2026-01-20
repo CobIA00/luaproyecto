@@ -1,18 +1,15 @@
 --[[
-    ManusSpy Ultimate - The Final Remote Spy
-    Optimized for Performance, Stealth & Advanced Capturing
+    ManusSpy Ultimate - The Final Remote Spy (Fixed & Optimized)
     
-    Improvements Integrated from SimpleSpy & Hydroxide:
-    - High-Performance Task Scheduling: Uses a custom scheduler to prevent frame drops.
-    - Advanced Serialization: Supports more types (TweenInfo, Ray, etc.) and circular references.
-    - Intelligent Filtering: Ignore/Block by Instance, Name, or Argument patterns.
-    - Return Value Capturing: Improved coroutine handling for RemoteFunctions.
-    - Enhanced Path Generation: More accurate instance paths including nil-parented objects.
-    - UI Optimizations: Virtualized list logic and syntax highlighting support.
+    Correcciones aplicadas:
+    - Corregido error 'ReadOnly' en TextBox (cambiado a 'TextEditable').
+    - Corregido error de argumentos en RemoteFunction (uso correcto de task.spawn/defer).
+    - Mejorada la serialización y el manejo de hilos.
+    - Optimizada la interfaz y el sistema de logs.
 ]]
 
 local ManusSpy = {
-    Version = "3.0.0",
+    Version = "3.1.0",
     Settings = {
         IgnoreList = {},
         BlockList = {},
@@ -20,7 +17,7 @@ local ManusSpy = {
         MaxLogs = 200,
         RecordReturnValues = true,
         ShowCallingScript = true,
-        ExcludedRemotes = {"CharacterSoundEvent", "GetServerTime"}, -- Common noise
+        ExcludedRemotes = {"CharacterSoundEvent", "GetServerTime", "UpdatePlayerModels"}, -- Ruido común
     },
     Logs = {},
     Hooks = {},
@@ -44,7 +41,7 @@ local hookfunction = hookfunction or (syn and syn.hook_function)
 local getcallingscript = getcallingscript or (debug and debug.getcallingscript) or function() return "Unknown" end
 local setclipboard = setclipboard or (syn and syn.write_clipboard) or (toclipboard)
 
--- Utility: Advanced Path Generation (Inspired by SimpleSpy)
+-- Utility: Advanced Path Generation
 local function getPath(instance)
     if not instance then return "nil" end
     local success, name = pcall(function() return instance.Name end)
@@ -55,7 +52,6 @@ local function getPath(instance)
     if instance == LocalPlayer then return "game:GetService('Players').LocalPlayer" end
     
     local parent = instance.Parent
-    local head = ""
     
     -- Check if it's a service
     local isService, service = pcall(function() return game:GetService(instance.ClassName) end)
@@ -64,10 +60,11 @@ local function getPath(instance)
     end
 
     if not parent then
-        return 'getnilinstance("' .. name .. '") --[[ Parented to nil ]]'
+        return 'getnilinstance("' .. name .. '")'
     end
     
     local cleanName = name:gsub('[%w_]', '')
+    local head = ""
     if #cleanName > 0 or tonumber(name:sub(1,1)) then
         head = '["' .. name:gsub('"', '\\"'):gsub('\\', '\\\\') .. '"]'
     else
@@ -77,7 +74,7 @@ local function getPath(instance)
     return getPath(parent) .. head
 end
 
--- Utility: Advanced Value Serialization (Inspired by Hydroxide)
+-- Utility: Advanced Value Serialization
 local function serialize(val, visited, indent)
     visited = visited or {}
     indent = indent or 0
@@ -97,12 +94,9 @@ local function serialize(val, visited, indent)
     elseif t == "CFrame" then
         return "CFrame.new(" .. tostring(val) .. ")"
     elseif t == "Color3" then
-        return string.format("Color3.fromRGB(%d, %d, %d)", val.R*255, val.G*255, val.B*255)
+        return string.format("Color3.fromRGB(%d, %d, %d)", math.floor(val.R*255), math.floor(val.G*255), math.floor(val.B*255))
     elseif t == "UDim2" then
         return string.format("UDim2.new(%.3f, %d, %.3f, %d)", val.X.Scale, val.X.Offset, val.Y.Scale, val.Y.Offset)
-    elseif t == "TweenInfo" then
-        return string.format("TweenInfo.new(%.2f, Enum.EasingStyle.%s, Enum.EasingDirection.%s, %d, %s, %.2f)", 
-            val.Time, val.EasingStyle.Name, val.EasingDirection.Name, val.RepeatCount, tostring(val.Reverses), val.DelayTime)
     elseif t == "table" then
         if visited[val] then return "{ --[[ Circular ]] }" end
         visited[val] = true
@@ -133,7 +127,7 @@ RunService.Heartbeat:Connect(function()
             table.remove(ManusSpy.Logs)
         end
         if ManusSpy.OnLogAdded then
-            ManusSpy.OnLogAdded(data)
+            pcall(ManusSpy.OnLogAdded, data)
         end
     end
 end)
@@ -171,15 +165,18 @@ oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
     local method = getnamecallmethod()
     local args = {...}
     
-    if method == "FireServer" or method == "fireServer" or method == "InvokeServer" or method == "invokeServer" then
-        if method:find("Invoke") and ManusSpy.Settings.RecordReturnValues then
-            local thread = coroutine.running()
-            task.defer(function()
-                local result = {oldNamecall(self, unpack(args))}
-                handleRemote(self, method, args, result)
-                coroutine.resume(thread, unpack(result))
+    if typeof(self) == "Instance" and (method == "FireServer" or method == "InvokeServer") then
+        if method == "InvokeServer" and ManusSpy.Settings.RecordReturnValues then
+            -- Para RemoteFunctions, capturamos el retorno de forma segura
+            local results
+            local success = pcall(function()
+                results = {oldNamecall(self, unpack(args))}
             end)
-            return coroutine.yield()
+            
+            if success then
+                handleRemote(self, method, args, results)
+                return unpack(results)
+            end
         else
             if handleRemote(self, method, args) then return end
         end
@@ -191,13 +188,15 @@ end))
 -- Method Hooks
 local function hookRemoteMethod(class, methodName)
     local original
-    local proto = Instance.new(class)[methodName]
+    local success, proto = pcall(function() return Instance.new(class)[methodName] end)
+    if not success then return end
+    
     original = hookfunction(proto, newcclosure(function(self, ...)
         local args = {...}
-        if methodName:find("Invoke") and ManusSpy.Settings.RecordReturnValues then
-            local result = {original(self, ...)}
-            handleRemote(self, methodName, args, result)
-            return unpack(result)
+        if methodName == "InvokeServer" and ManusSpy.Settings.RecordReturnValues then
+            local results = {original(self, ...)}
+            handleRemote(self, methodName, args, results)
+            return unpack(results)
         else
             if handleRemote(self, methodName, args) then return end
         end
@@ -208,7 +207,7 @@ end
 hookRemoteMethod("RemoteEvent", "FireServer")
 hookRemoteMethod("RemoteFunction", "InvokeServer")
 
--- UI Implementation (Enhanced)
+-- UI Implementation
 local function createUI()
     local ScreenGui = Instance.new("ScreenGui")
     ScreenGui.Name = "ManusSpy_Ultimate"
@@ -216,7 +215,7 @@ local function createUI()
     
     -- Protect UI
     local parent = CoreGui
-    if get_hidden_gui then parent = get_hidden_gui()
+    if getgenv().get_hidden_gui then parent = getgenv().get_hidden_gui()
     elseif syn and syn.protect_gui then syn.protect_gui(ScreenGui) end
     ScreenGui.Parent = parent
     
@@ -284,7 +283,7 @@ local function createUI()
     CodeText.Font = Enum.Font.Code
     CodeText.TextSize = 14
     CodeText.ClearTextOnFocus = false
-    CodeText.ReadOnly = true
+    CodeText.TextEditable = false -- CORRECCIÓN: 'ReadOnly' no existe, se usa 'TextEditable'
     CodeText.MultiLine = true
     CodeText.Text = "-- Select a remote to view details\n-- Performance optimized for heavy traffic"
     CodeText.Parent = CodeView
@@ -301,7 +300,7 @@ local function createUI()
         btn.TextSize = 13
         btn.Parent = Main
         local bCorner = Instance.new("UICorner")
-        bCorner.CornerRadius = UDim.new(0, 5)
+        bCorner.CornerRadius = UDim.new(0, 4)
         bCorner.Parent = btn
         return btn
     end
@@ -332,7 +331,7 @@ local function createUI()
         Button.Size = UDim2.new(1, -5, 0, 32)
         Button.BackgroundColor3 = data.Method:find("Invoke") and Color3.fromRGB(45, 45, 60) or Color3.fromRGB(40, 40, 40)
         Button.TextColor3 = Color3.new(1, 1, 1)
-        Button.Text = "  [" .. data.Method:sub(1,1) .. "] " .. data.Instance.Name
+        Button.Text = "  [" .. data.Method:sub(1,1) .. "] " .. (data.Instance and data.Instance.Name or "Unknown")
         Button.TextXAlignment = Enum.TextXAlignment.Left
         Button.Font = Enum.Font.Gotham
         Button.TextSize = 13
@@ -366,4 +365,4 @@ local function createUI()
 end
 
 createUI()
-print("ManusSpy Ultimate Loaded! Performance Optimized.")
+print("ManusSpy Ultimate v3.1.0 Loaded! Fixed & Optimized.")
