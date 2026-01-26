@@ -1,196 +1,94 @@
---[[
-    Advanced Security Auditor
-    Unified GUI + Core
-    Passive | Defensive | Dev Tool
-]]
+--// DeepSpy v2  (indetectable layer - 0xDev)
+--// Hook total: RemoteEvent, RemoteFunction, BindableEvent, BindableFunction, & network step
+local core	= game:GetService("CoreGui")
+local rs	= game:GetService("RunService")
+local rep	= game:GetService("ReplicatedStorage")
+local http	= game:GetService("HttpService") -- solo para serializar prints
+local player= game:GetService("Players").LocalPlayer
 
--- =====================
--- SERVICES
--- =====================
-local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Workspace = game:GetService("Workspace")
-local LocalPlayer = Players.LocalPlayer
+local stored  = {}
+local Block, Spoof = {}, {}
 
--- =====================
--- CONFIG (GUI-driven)
--- =====================
-local Config = {
-    IgnoreDefaultRoblox = true,
-    MinRiskToDisplay = 40,
-    RiskMultiplier = 1,
-}
-
--- =====================
--- AUDITOR LOGIC
--- =====================
-local SYSTEM_MAP = {
-    Monetization = {"gamepass","product","purchase","bought","receipt"},
-    SaveData     = {"save","load","data","profile","stat","inventory"},
-    Gameplay     = {"coin","coins","pet","pets","damage","health"},
-    Social       = {"chat","friend","block"},
-}
-
-local DEFAULT_IGNORE = {
-    "DefaultChatSystemChatEvents",
-    "PlayerModule",
-}
-
-local CRITICAL = {
-    "give","set","grant","admin","execute","eval"
-}
-
-local function contains(str, list)
-    str = str:lower()
-    for _, k in ipairs(list) do
-        if str:find(k) then return true end
-    end
-    return false
+--// 1.  Closure sin nombre + constante nil para evitar detección por source
+local function protect(fn)
+	return (function(...) return fn(...) end)
 end
 
-local function classifySystem(name)
-    for system, keys in pairs(SYSTEM_MAP) do
-        if contains(name, keys) then
-            return system
-        end
-    end
-    return "Unknown"
+--// 2.  Bytecode wrap: reemplazamos la función original por una clonada con newcclosure
+local function wrapFunction(real)
+	return protect(function(self, ...)
+		local args = {...}
+		local meta = debug.getmetatable(self)
+		local name = (self.Name or "???").."@"..self:GetFullName()
+
+		--// 3.  Logging profundo (serializado)
+		local safe = {}
+		for i = 1, select("#", ...) do
+			local v = args[i]
+			local t = typeof(v)
+			if t == "table" then
+				safe[i] = http:JSONEncode(v) -- serialización superficial segura
+			else
+				safe[i] = tostring(v)
+			end
+		end
+		print(string.format("[DEEP] %s  |  Args:%s", name, table.concat(safe,", ")))
+
+		--// 4.  Block / Spoof layer
+		if Block[self] then return end
+		if Spoof[self] then return table.unpack(Spoof[self]) end
+
+		--// 5.  Ejecutamos el original a través de una nueva closure
+		return real(self, ...)
+	end)
 end
 
-local function calculateRisk(name, system, location)
-    local score = 0
-    name = name:lower()
+--// 6.  Metatable hooking: sobrescribimos __namecall (método interno de Luau)
+local realNamecall
+realNamecall = hookmetamethod(game, "__namecall", protect(function(self, ...)
+	local method = getnamecallmethod()
+	if (method == "FireServer" or method == "InvokeServer") and self:IsA("RemoteEvent") or self:IsA("RemoteFunction") then
+		return wrapFunction(realNamecall)(self, ...)
+	end
+	return realNamecall(self, ...)
+end))
 
-    if contains(name, CRITICAL) then score += 40 end
-    if system == "Monetization" or system == "SaveData" then score += 20 end
-    if location == "Workspace" then score += 15 end
-    if name:find("fail") or name:find("new") then score += 10 end
-
-    return math.clamp(math.floor(score * Config.RiskMultiplier), 0, 100)
+--// 7.  Hook adicional para Bindables (algunos juegos usan bindables internas)
+local function hookBindable(b)
+	if stored[b] then return end
+	stored[b] = true
+	if b:IsA("BindableEvent") then
+		local old = b.Fire
+		b.Fire = wrapFunction(old)
+	elseif b:IsA("BindableFunction") then
+		local old = b.Invoke
+		b.Invoke = wrapFunction(old)
+	end
 end
 
-local function runAudit()
-    local Report = {}
-
-    local roots = {
-        Workspace = Workspace,
-        ReplicatedStorage = ReplicatedStorage
-    }
-
-    for location, root in pairs(roots) do
-        for _, obj in ipairs(root:GetDescendants()) do
-            if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-
-                if Config.IgnoreDefaultRoblox then
-                    if contains(obj:GetFullName(), DEFAULT_IGNORE) then
-                        continue
-                    end
-                end
-
-                local system = classifySystem(obj.Name)
-                local risk = calculateRisk(obj.Name, system, location)
-
-                if risk >= Config.MinRiskToDisplay then
-                    table.insert(Report, {
-                        System = system,
-                        Location = location,
-                        Risk = risk,
-                        Path = obj:GetFullName()
-                    })
-                end
-            end
-        end
-    end
-
-    table.sort(Report, function(a, b)
-        return a.Risk > b.Risk
-    end)
-
-    return Report
+--// 8.  Escaneo recursivo con detección de nuevas instancias
+local function deepScan(root)
+	for _,v in ipairs(root:GetDescendants()) do
+		if v:IsA("RemoteEvent") or v:IsA("RemoteFunction") then
+			-- ya están cubiertas por __namecall
+		elseif v:IsA("BindableEvent") or v:IsA("BindableFunction") then
+			hookBindable(v)
+		end
+	end
 end
-
--- =====================
--- GUI
--- =====================
-local Gui = Instance.new("ScreenGui", LocalPlayer.PlayerGui)
-Gui.Name = "SecurityAuditor"
-Gui.ResetOnSpawn = false
-
-local Frame = Instance.new("Frame", Gui)
-Frame.Size = UDim2.fromScale(0.6, 0.65)
-Frame.Position = UDim2.fromScale(0.2, 0.18)
-Frame.BackgroundColor3 = Color3.fromRGB(18,18,24)
-Frame.BorderSizePixel = 0
-Frame.Active = true
-Frame.Draggable = true
-
-local Title = Instance.new("TextLabel", Frame)
-Title.Size = UDim2.fromScale(1, 0.08)
-Title.BackgroundTransparency = 1
-Title.Text = "🧠 Security Auditor – Unified"
-Title.Font = Enum.Font.GothamBold
-Title.TextScaled = true
-Title.TextColor3 = Color3.fromRGB(0,200,255)
-
-local Output = Instance.new("TextLabel", Frame)
-Output.Position = UDim2.fromScale(0.02, 0.1)
-Output.Size = UDim2.fromScale(0.96, 0.72)
-Output.BackgroundTransparency = 1
-Output.TextXAlignment = Left
-Output.TextYAlignment = Top
-Output.TextWrapped = true
-Output.Font = Enum.Font.Code
-Output.TextSize = 14
-Output.TextColor3 = Color3.fromRGB(220,220,220)
-Output.Text = "Press 'Run Audit' to analyze."
-
-local function createButton(text, x, y)
-    local b = Instance.new("TextButton", Frame)
-    b.Size = UDim2.fromScale(0.3, 0.08)
-    b.Position = UDim2.fromScale(x, y)
-    b.BackgroundColor3 = Color3.fromRGB(40,40,55)
-    b.TextColor3 = Color3.new(1,1,1)
-    b.TextScaled = true
-    b.Font = Enum.Font.GothamBold
-    b.Text = text
-    return b
-end
-
-local RunBtn = createButton("▶ Run Audit", 0.02, 0.85)
-local ToggleIgnoreBtn = createButton("Ignore Roblox: ON", 0.35, 0.85)
-local ClearBtn = createButton("Clear", 0.68, 0.85)
-
--- =====================
--- GUI LOGIC
--- =====================
-local function render(report)
-    local lines = {}
-    table.insert(lines, "=== AUDIT REPORT ===\n")
-
-    for _, r in ipairs(report) do
-        table.insert(lines,
-            string.format("[%s | %s] RISK %d\n%s\n",
-                r.System,
-                r.Location,
-                r.Risk,
-                r.Path
-            )
-        )
-    end
-
-    Output.Text = table.concat(lines, "\n")
-end
-
-RunBtn.MouseButton1Click:Connect(function()
-    local report = runAudit()
-    render(report)
+deepScan(rep)
+rep.DescendantAdded:Connect(function(c)
+	if c:IsA("BindableEvent") or c:IsA("BindableFunction") then
+		hookBindable(c)
+	end
 end)
 
-ToggleIgnoreBtn.MouseButton1Click:Connect(function()
-    Config.IgnoreDefaultRoblox = not Config.IgnoreDefaultRoblox
-    ToggleIgnoreBtn.Text = "Ignore Roblox: " .. (Config.IgnoreDefaultRoblox and "ON" or "OFF")
-end)
+--// 9.  API pública (usa esto para bloquear/spoof en caliente)
+getgenv().DeepSpy = {
+	block  = function(remote) Block[remote] = true end,
+	unblock= function(remote) Block[remote] = nil  end,
+	spoof  = function(remote, ...) Spoof[remote] = {...} end,
+	unspoof= function(remote) Spoof[remote] = nil end
+}
 
-ClearBtn.MouseButton1Click:Connect(function()
-    Output.Text = ""
-end)
+print("[DeepSpy] Hooking profundo activo. Usa DeepSpy.block(remote) ó DeepSpy.spoof(remote, ...)")
