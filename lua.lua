@@ -1,106 +1,303 @@
---// DeltaPets-Fix  (inyección directa en el hilo del módulo)
---// by 0xDev – 100 % móvil / Delta
+-- ConsoleInterceptor v2.0 (Delta & Mobile Compatible)
+-- ModuleScript
 
-local player = game:GetService("Players").LocalPlayer
-local core   = game:GetService("CoreGui")
+local ConsoleInterceptor = {}
 
-------------------------------------------------------------------------
--- 1.  Capturamos el hilo real del módulo antes de que use GetPetDir
-------------------------------------------------------------------------
-local petScript = player:WaitForChild("PlayerGui")
-                    :WaitForChild("Scripts")
-                    :WaitForChild("Game")
-                    :WaitForChild("Pets")
+local logs = {}
+ConsoleInterceptor.__logs = logs
 
---// Forzamos a que el hilo corra *ahora* (si aún no lo ha hecho)
---    con un dummy-require que dispara su loader interno
-task.spawn(function()
-    -- Ejecutamos el LocalScript interno para que se cree el entorno
-    for _, scr in ipairs(petScript:GetDescendants()) do
-        if scr:IsA("LocalScript") and scr.Name:find("Pets") then
-            scr.Disabled = true
-            scr.Disabled = false   -- fuerza re-run
-            break
-        end
+local _print, _warn, _error = print, warn, error
+
+local function appendLog(level, text)
+    local timestamp = os.date("%H:%M:%S")
+    local line = string.format("[%s] %s: %s", timestamp, level, tostring(text))
+    table.insert(logs, line)
+    
+    if ConsoleInterceptor.OnNewLog then
+        pcall(ConsoleInterceptor.OnNewLog, line)
     end
+end
+
+local function joinArgs(...)
+    local n = select('#', ...)
+    local parts = {}
+    for i = 1, n do
+        parts[i] = tostring(select(i, ...))
+    end
+    return table.concat(parts, '\t')
+end
+
+print = function(...)
+    local text = joinArgs(...)
+    appendLog('INFO', text)
+    _print(...)
+end
+
+warn = function(...)
+    local text = joinArgs(...)
+    appendLog('WARN', text)
+    _warn(...)
+end
+
+error = function(msg, level)
+    local text = tostring(msg)
+    appendLog('ERROR', text)
+    _error(msg, (level or 1) + 1)
+end
+
+pcall(function()
+    local LogService = game:GetService('LogService')
+    LogService.MessageOut:Connect(function(message, messageType)
+        local mt = tostring(messageType):gsub("Enum.MessageType.", "")
+        appendLog('ENGINE:'..mt, message)
+    end)
 end)
 
-------------------------------------------------------------------------
--- 2.  Patcheamos la función *desde dentro* usando debug.info
-------------------------------------------------------------------------
-local targetFunc = nil
-local safety = Vector3.new(0, 0, 1)  -- valor "n" seguro
-local safetyR = 0                      -- valor "r" seguro
+function ConsoleInterceptor.GetAllText()
+    return table.concat(logs, '\n')
+end
 
---// Escaneamos cada frame hasta que la función aparezca
-local heartbeat; heartbeat = game:GetService("RunService").Heartbeat:Connect(function()
-    -- Busca cualquier función cuyo source contenga "GetPetDir"
-    for _, thread in ipairs(debug.getregistry()) do
-        if type(thread) == "thread" and coroutine.status(thread) == "suspended" then
-            local info = debug.getinfo(thread, "fn")
-            if info and info.what == "Lua" and info.name == "GetPetDir" then
-                targetFunc = info.func
-                heartbeat:Disconnect()
-                break
+function ConsoleInterceptor.GetLines()
+    local copy = {}
+    for i = 1, #logs do
+        copy[i] = logs[i]
+    end
+    return copy
+end
+
+function ConsoleInterceptor.Clear()
+    logs = {}
+    ConsoleInterceptor.__logs = logs
+end
+
+-- GUI Script
+local Players = game:GetService('Players')
+local UserInputService = game:GetService('UserInputService')
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild('PlayerGui')
+
+local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
+local screenGui = Instance.new('ScreenGui')
+screenGui.Name = 'ConsoleInterceptorGUI'
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+if gethui then
+    screenGui.Parent = gethui()
+elseif syn and syn.protect_gui then
+    syn.protect_gui(screenGui)
+    screenGui.Parent = playerGui
+else
+    screenGui.Parent = playerGui
+end
+
+local main = Instance.new('Frame')
+main.Name = 'Main'
+main.Size = isMobile and UDim2.new(0.95, 0, 0, 400) or UDim2.new(0, 520, 0, 300)
+main.Position = isMobile and UDim2.new(0.025, 0, 0.1, 0) or UDim2.new(0, 20, 0, 20)
+main.BackgroundTransparency = 0.1
+main.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+main.BorderSizePixel = 2
+main.BorderColor3 = Color3.fromRGB(60, 60, 60)
+main.Active = true
+main.Parent = screenGui
+
+local corner = Instance.new('UICorner')
+corner.CornerRadius = UDim.new(0, 8)
+corner.Parent = main
+
+local dragging, dragInput, dragStart, startPos
+
+local function updateDrag(input)
+    local delta = input.Position - dragStart
+    main.Position = UDim2.new(
+        startPos.X.Scale, startPos.X.Offset + delta.X,
+        startPos.Y.Scale, startPos.Y.Offset + delta.Y
+    )
+end
+
+main.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or 
+       input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = main.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
             end
+        end)
+    end
+end)
+
+main.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or
+       input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and input == dragInput then
+        updateDrag(input)
+    end
+end)
+
+local title = Instance.new('TextLabel')
+title.Size = UDim2.new(1, -140, 0, 30)
+title.Position = UDim2.new(0, 10, 0, 5)
+title.Text = 'ðŸ“‹ Console Logger'
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.BackgroundTransparency = 1
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.Font = Enum.Font.GothamBold
+title.TextSize = isMobile and 16 or 18
+title.Parent = main
+
+local closeBtn = Instance.new('TextButton')
+closeBtn.Size = UDim2.new(0, 30, 0, 30)
+closeBtn.Position = UDim2.new(1, -35, 0, 5)
+closeBtn.Text = 'âœ•'
+closeBtn.TextSize = 20
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+closeBtn.TextColor3 = Color3.new(1, 1, 1)
+closeBtn.Parent = main
+
+local closeBtnCorner = Instance.new('UICorner')
+closeBtnCorner.CornerRadius = UDim.new(0, 6)
+closeBtnCorner.Parent = closeBtn
+
+closeBtn.MouseButton1Click:Connect(function()
+    screenGui:Destroy()
+end)
+
+local copyBtn = Instance.new('TextButton')
+copyBtn.Size = UDim2.new(0, isMobile and 70 or 80, 0, 28)
+copyBtn.Position = UDim2.new(1, isMobile and -145 or -125, 0, 40)
+copyBtn.Text = 'ðŸ“„ Copy'
+copyBtn.TextSize = isMobile and 12 or 14
+copyBtn.Font = Enum.Font.Gotham
+copyBtn.BackgroundColor3 = Color3.fromRGB(50, 150, 250)
+copyBtn.TextColor3 = Color3.new(1, 1, 1)
+copyBtn.Parent = main
+
+local copyBtnCorner = Instance.new('UICorner')
+copyBtnCorner.CornerRadius = UDim.new(0, 6)
+copyBtnCorner.Parent = copyBtn
+
+local clearBtn = Instance.new('TextButton')
+clearBtn.Size = UDim2.new(0, isMobile and 70 or 80, 0, 28)
+clearBtn.Position = UDim2.new(1, isMobile and -215 or -215, 0, 40)
+clearBtn.Text = 'ðŸ—‘ï¸ Clear'
+clearBtn.TextSize = isMobile and 12 or 14
+clearBtn.Font = Enum.Font.Gotham
+clearBtn.BackgroundColor3 = Color3.fromRGB(250, 100, 50)
+clearBtn.TextColor3 = Color3.new(1, 1, 1)
+clearBtn.Parent = main
+
+local clearBtnCorner = Instance.new('UICorner')
+clearBtnCorner.CornerRadius = UDim.new(0, 6)
+clearBtnCorner.Parent = clearBtn
+
+local scroll = Instance.new('ScrollingFrame')
+scroll.Size = UDim2.new(1, -20, 1, -85)
+scroll.Position = UDim2.new(0, 10, 0, 75)
+scroll.BackgroundTransparency = 0.3
+scroll.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+scroll.BorderSizePixel = 0
+scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+scroll.ScrollBarThickness = isMobile and 6 or 8
+scroll.Parent = main
+
+local scrollCorner = Instance.new('UICorner')
+scrollCorner.CornerRadius = UDim.new(0, 6)
+scrollCorner.Parent = scroll
+
+local uiList = Instance.new('UIListLayout')
+uiList.SortOrder = Enum.SortOrder.LayoutOrder
+uiList.Padding = UDim.new(0, 2)
+uiList.Parent = scroll
+
+local function appendToUI(line)
+    local label = Instance.new('TextLabel')
+    label.Size = UDim2.new(1, -10, 0, isMobile and 20 or 18)
+    label.BackgroundTransparency = 1
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Text = line
+    label.TextColor3 = Color3.fromRGB(220, 220, 220)
+    label.TextSize = isMobile and 11 or 13
+    label.Font = Enum.Font.Code
+    label.TextWrapped = false
+    label.Parent = scroll
+    
+    task.wait()
+    local contentSize = uiList.AbsoluteContentSize
+    scroll.CanvasSize = UDim2.new(0, 0, 0, contentSize.Y + 10)
+    scroll.CanvasPosition = Vector2.new(0, math.max(0, contentSize.Y - scroll.AbsoluteSize.Y))
+end
+
+ConsoleInterceptor.OnNewLog = function(line)
+    appendToUI(line)
+end
+
+for _, line in ipairs(ConsoleInterceptor.GetLines()) do
+    appendToUI(line)
+end
+
+copyBtn.MouseButton1Click:Connect(function()
+    local text = ConsoleInterceptor.GetAllText()
+    local success = false
+    
+    if setclipboard then
+        pcall(function()
+            setclipboard(text)
+            success = true
+        end)
+    end
+    
+    if not success and Clipboard and Clipboard.set then
+        pcall(function()
+            Clipboard.set(text)
+            success = true
+        end)
+    end
+    
+    if success then
+        copyBtn.Text = 'âœ“ Copied!'
+        copyBtn.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+        task.wait(2)
+        copyBtn.Text = 'ðŸ“„ Copy'
+        copyBtn.BackgroundColor3 = Color3.fromRGB(50, 150, 250)
+    else
+        copyBtn.Text = 'âœ— Failed'
+        copyBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+        task.wait(2)
+        copyBtn.Text = 'ðŸ“„ Copy'
+        copyBtn.BackgroundColor3 = Color3.fromRGB(50, 150, 250)
+    end
+end)
+
+clearBtn.MouseButton1Click:Connect(function()
+    ConsoleInterceptor.Clear()
+    for _, child in ipairs(scroll:GetChildren()) do
+        if child:IsA('TextLabel') then
+            child:Destroy()
         end
     end
+    clearBtn.Text = 'âœ“ Cleared'
+    task.wait(1)
+    clearBtn.Text = 'ðŸ—‘ï¸ Clear'
 end)
 
---// Una vez encontrada, la reemplazamos por una que nunca devuelva nil
-task.spawn(function()
-    while not targetFunc do task.wait() end
-    -- Sustituimos la upvalue que devuelve la tabla
-    local upvalue = 1
-    while debug.getupvalue(targetFunc, upvalue) ~= nil do
-        upvalue = upvalue + 1
-    end
-    -- La *última* upvalue es la que devuelve la tabla {n=..., r=...}
-    debug.setupvalue(targetFunc, upvalue - 1, function(...) return {n = safety, r = safetyR} end)
-end)
-
-------------------------------------------------------------------------
--- 3.  GUI mínima (sin syn, sin require, sin protec_gui)
-------------------------------------------------------------------------
-local gui = Instance.new("ScreenGui")
-gui.Name = string.reverse("Fixed")
-gui.ResetOnSpawn = false
-gui.Parent = core
-
-local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 220, 0, 60)
-main.Position = UDim2.new(0.5, -110, 0.05, 0)
-main.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-main.BorderSizePixel = 0
-main.Parent = gui
-
-local lab = Instance.new("TextLabel")
-lab.Size = UDim2.new(1, 0, 1, 0)
-lab.BackgroundTransparency = 1
-lab.Text = "Pets crash parcheado ✔"
-lab.TextColor3 = Color3.new(0, 1, 0)
-lab.Font = Enum.Font.GothamBold
-lab.TextSize = 14
-lab.Parent = main
-
--- drag táctil
-local uis = game:GetService("UserInputService")
-local drag, g start
-main.InputBegan:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
-        drag = true; g start = i.Position; g = main.Position
-    end
-end)
-uis.InputChanged:Connect(function(i)
-    if drag and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
-        local d = i.Position - g start
-        main.Position = UDim2.new(g.X.Scale, g.X.Offset + d.X,
-                                 g.Y.Scale, g.Y.Offset + d.Y)
-    end
-end)
-uis.InputEnded:Connect(function(i)
-    if drag and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1) then
-        drag = false
+player.Chatted:Connect(function(msg)
+    if msg:lower() == "/console" then
+        main.Visible = not main.Visible
     end
 end)
 
+print("Console Interceptor loaded! Use /console to toggle")
+
+return ConsoleInterceptor
