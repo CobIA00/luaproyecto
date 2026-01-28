@@ -1,1 +1,303 @@
+-- ConsoleInterceptor v2.0 (Delta & Mobile Compatible)
+-- ModuleScript
 
+local ConsoleInterceptor = {}
+
+local logs = {}
+ConsoleInterceptor.__logs = logs
+
+local _print, _warn, _error = print, warn, error
+
+local function appendLog(level, text)
+    local timestamp = os.date("%H:%M:%S")
+    local line = string.format("[%s] %s: %s", timestamp, level, tostring(text))
+    table.insert(logs, line)
+    
+    if ConsoleInterceptor.OnNewLog then
+        pcall(ConsoleInterceptor.OnNewLog, line)
+    end
+end
+
+local function joinArgs(...)
+    local n = select('#', ...)
+    local parts = {}
+    for i = 1, n do
+        parts[i] = tostring(select(i, ...))
+    end
+    return table.concat(parts, '\t')
+end
+
+print = function(...)
+    local text = joinArgs(...)
+    appendLog('INFO', text)
+    _print(...)
+end
+
+warn = function(...)
+    local text = joinArgs(...)
+    appendLog('WARN', text)
+    _warn(...)
+end
+
+error = function(msg, level)
+    local text = tostring(msg)
+    appendLog('ERROR', text)
+    _error(msg, (level or 1) + 1)
+end
+
+pcall(function()
+    local LogService = game:GetService('LogService')
+    LogService.MessageOut:Connect(function(message, messageType)
+        local mt = tostring(messageType):gsub("Enum.MessageType.", "")
+        appendLog('ENGINE:'..mt, message)
+    end)
+end)
+
+function ConsoleInterceptor.GetAllText()
+    return table.concat(logs, '\n')
+end
+
+function ConsoleInterceptor.GetLines()
+    local copy = {}
+    for i = 1, #logs do
+        copy[i] = logs[i]
+    end
+    return copy
+end
+
+function ConsoleInterceptor.Clear()
+    logs = {}
+    ConsoleInterceptor.__logs = logs
+end
+
+-- GUI Script
+local Players = game:GetService('Players')
+local UserInputService = game:GetService('UserInputService')
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild('PlayerGui')
+
+local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
+local screenGui = Instance.new('ScreenGui')
+screenGui.Name = 'ConsoleInterceptorGUI'
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+if gethui then
+    screenGui.Parent = gethui()
+elseif syn and syn.protect_gui then
+    syn.protect_gui(screenGui)
+    screenGui.Parent = playerGui
+else
+    screenGui.Parent = playerGui
+end
+
+local main = Instance.new('Frame')
+main.Name = 'Main'
+main.Size = isMobile and UDim2.new(0.95, 0, 0, 400) or UDim2.new(0, 520, 0, 300)
+main.Position = isMobile and UDim2.new(0.025, 0, 0.1, 0) or UDim2.new(0, 20, 0, 20)
+main.BackgroundTransparency = 0.1
+main.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+main.BorderSizePixel = 2
+main.BorderColor3 = Color3.fromRGB(60, 60, 60)
+main.Active = true
+main.Parent = screenGui
+
+local corner = Instance.new('UICorner')
+corner.CornerRadius = UDim.new(0, 8)
+corner.Parent = main
+
+local dragging, dragInput, dragStart, startPos
+
+local function updateDrag(input)
+    local delta = input.Position - dragStart
+    main.Position = UDim2.new(
+        startPos.X.Scale, startPos.X.Offset + delta.X,
+        startPos.Y.Scale, startPos.Y.Offset + delta.Y
+    )
+end
+
+main.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or 
+       input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = main.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+main.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or
+       input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and input == dragInput then
+        updateDrag(input)
+    end
+end)
+
+local title = Instance.new('TextLabel')
+title.Size = UDim2.new(1, -140, 0, 30)
+title.Position = UDim2.new(0, 10, 0, 5)
+title.Text = '📋 Console Logger'
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.BackgroundTransparency = 1
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.Font = Enum.Font.GothamBold
+title.TextSize = isMobile and 16 or 18
+title.Parent = main
+
+local closeBtn = Instance.new('TextButton')
+closeBtn.Size = UDim2.new(0, 30, 0, 30)
+closeBtn.Position = UDim2.new(1, -35, 0, 5)
+closeBtn.Text = '✕'
+closeBtn.TextSize = 20
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+closeBtn.TextColor3 = Color3.new(1, 1, 1)
+closeBtn.Parent = main
+
+local closeBtnCorner = Instance.new('UICorner')
+closeBtnCorner.CornerRadius = UDim.new(0, 6)
+closeBtnCorner.Parent = closeBtn
+
+closeBtn.MouseButton1Click:Connect(function()
+    screenGui:Destroy()
+end)
+
+local copyBtn = Instance.new('TextButton')
+copyBtn.Size = UDim2.new(0, isMobile and 70 or 80, 0, 28)
+copyBtn.Position = UDim2.new(1, isMobile and -145 or -125, 0, 40)
+copyBtn.Text = '📄 Copy'
+copyBtn.TextSize = isMobile and 12 or 14
+copyBtn.Font = Enum.Font.Gotham
+copyBtn.BackgroundColor3 = Color3.fromRGB(50, 150, 250)
+copyBtn.TextColor3 = Color3.new(1, 1, 1)
+copyBtn.Parent = main
+
+local copyBtnCorner = Instance.new('UICorner')
+copyBtnCorner.CornerRadius = UDim.new(0, 6)
+copyBtnCorner.Parent = copyBtn
+
+local clearBtn = Instance.new('TextButton')
+clearBtn.Size = UDim2.new(0, isMobile and 70 or 80, 0, 28)
+clearBtn.Position = UDim2.new(1, isMobile and -215 or -215, 0, 40)
+clearBtn.Text = '🗑️ Clear'
+clearBtn.TextSize = isMobile and 12 or 14
+clearBtn.Font = Enum.Font.Gotham
+clearBtn.BackgroundColor3 = Color3.fromRGB(250, 100, 50)
+clearBtn.TextColor3 = Color3.new(1, 1, 1)
+clearBtn.Parent = main
+
+local clearBtnCorner = Instance.new('UICorner')
+clearBtnCorner.CornerRadius = UDim.new(0, 6)
+clearBtnCorner.Parent = clearBtn
+
+local scroll = Instance.new('ScrollingFrame')
+scroll.Size = UDim2.new(1, -20, 1, -85)
+scroll.Position = UDim2.new(0, 10, 0, 75)
+scroll.BackgroundTransparency = 0.3
+scroll.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+scroll.BorderSizePixel = 0
+scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+scroll.ScrollBarThickness = isMobile and 6 or 8
+scroll.Parent = main
+
+local scrollCorner = Instance.new('UICorner')
+scrollCorner.CornerRadius = UDim.new(0, 6)
+scrollCorner.Parent = scroll
+
+local uiList = Instance.new('UIListLayout')
+uiList.SortOrder = Enum.SortOrder.LayoutOrder
+uiList.Padding = UDim.new(0, 2)
+uiList.Parent = scroll
+
+local function appendToUI(line)
+    local label = Instance.new('TextLabel')
+    label.Size = UDim2.new(1, -10, 0, isMobile and 20 or 18)
+    label.BackgroundTransparency = 1
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Text = line
+    label.TextColor3 = Color3.fromRGB(220, 220, 220)
+    label.TextSize = isMobile and 11 or 13
+    label.Font = Enum.Font.Code
+    label.TextWrapped = false
+    label.Parent = scroll
+    
+    task.wait()
+    local contentSize = uiList.AbsoluteContentSize
+    scroll.CanvasSize = UDim2.new(0, 0, 0, contentSize.Y + 10)
+    scroll.CanvasPosition = Vector2.new(0, math.max(0, contentSize.Y - scroll.AbsoluteSize.Y))
+end
+
+ConsoleInterceptor.OnNewLog = function(line)
+    appendToUI(line)
+end
+
+for _, line in ipairs(ConsoleInterceptor.GetLines()) do
+    appendToUI(line)
+end
+
+copyBtn.MouseButton1Click:Connect(function()
+    local text = ConsoleInterceptor.GetAllText()
+    local success = false
+    
+    if setclipboard then
+        pcall(function()
+            setclipboard(text)
+            success = true
+        end)
+    end
+    
+    if not success and Clipboard and Clipboard.set then
+        pcall(function()
+            Clipboard.set(text)
+            success = true
+        end)
+    end
+    
+    if success then
+        copyBtn.Text = '✓ Copied!'
+        copyBtn.BackgroundColor3 = Color3.fromRGB(50, 200, 50)
+        task.wait(2)
+        copyBtn.Text = '📄 Copy'
+        copyBtn.BackgroundColor3 = Color3.fromRGB(50, 150, 250)
+    else
+        copyBtn.Text = '✗ Failed'
+        copyBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+        task.wait(2)
+        copyBtn.Text = '📄 Copy'
+        copyBtn.BackgroundColor3 = Color3.fromRGB(50, 150, 250)
+    end
+end)
+
+clearBtn.MouseButton1Click:Connect(function()
+    ConsoleInterceptor.Clear()
+    for _, child in ipairs(scroll:GetChildren()) do
+        if child:IsA('TextLabel') then
+            child:Destroy()
+        end
+    end
+    clearBtn.Text = '✓ Cleared'
+    task.wait(1)
+    clearBtn.Text = '🗑️ Clear'
+end)
+
+player.Chatted:Connect(function(msg)
+    if msg:lower() == "/console" then
+        main.Visible = not main.Visible
+    end
+end)
+
+print("Console Interceptor loaded! Use /console to toggle")
+
+return ConsoleInterceptor
