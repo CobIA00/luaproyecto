@@ -1,5 +1,5 @@
--- GetGC Explorer Ultimate v3.2 - Delta Executor 2026 (corregido para C functions)
--- Protegido contra errores en debug.getupvalue y debug.getconstant
+-- GetGC Explorer Ultimate v3.3 - Delta Executor 2026 (corregido Instance concatenation)
+-- Fix: tostring() en scriptName y más protecciones
 
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
@@ -21,7 +21,7 @@ MainFrame.Parent = ScreenGui
 
 Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 14)
 
--- Drag (mouse + touch)
+-- Drag
 local dragging, dragStart, startPos
 MainFrame.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
@@ -30,9 +30,7 @@ MainFrame.InputBegan:Connect(function(input)
         startPos = MainFrame.Position
         
         input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false
-            end
+            if input.UserInputState == Enum.UserInputState.End then dragging = false end
         end)
     end
 end)
@@ -54,7 +52,7 @@ Instance.new("UICorner", TopBar).CornerRadius = UDim.new(0, 14)
 local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(0.6, 0, 1, 0)
 Title.BackgroundTransparency = 1
-Title.Text = "🔍 GetGC Explorer v3.2 - Delta"
+Title.Text = "🔍 GetGC Explorer v3.3 - Delta"
 Title.TextColor3 = Color3.new(1,1,1)
 Title.TextScaled = true
 Title.Font = Enum.Font.GothamBold
@@ -64,7 +62,7 @@ local SearchBox = Instance.new("TextBox")
 SearchBox.Size = UDim2.new(0.32, 0, 0.65, 0)
 SearchBox.Position = UDim2.new(0.55, 0, 0.17, 0)
 SearchBox.BackgroundColor3 = Color3.fromRGB(45, 45, 58)
-SearchBox.PlaceholderText = "Buscar..."
+SearchBox.PlaceholderText = "Buscar tipo / nombre / script..."
 SearchBox.Text = ""
 SearchBox.TextColor3 = Color3.new(1,1,1)
 SearchBox.TextScaled = true
@@ -139,7 +137,7 @@ for _, name in ipairs(tabNames) do
     table.insert(TabBtns, btn)
 end
 
--- List & Info Frames
+-- List & Info
 local ListFrame = Instance.new("ScrollingFrame")
 ListFrame.Size = UDim2.new(0.48, 0, 1, -105)
 ListFrame.Position = UDim2.new(0.01, 0, 0.14, 0)
@@ -172,22 +170,18 @@ InfoLayout.Padding = UDim.new(0, 4)
 InfoLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() UpdateCanvas(InfoFrame, InfoLayout) end)
 
 local function ClearList()
-    for _, c in ipairs(ListFrame:GetChildren()) do
-        if c:IsA("TextButton") then c:Destroy() end
-    end
+    for _, c in ipairs(ListFrame:GetChildren()) do if c:IsA("TextButton") then c:Destroy() end end
 end
 
 local function ClearInfo()
-    for _, c in ipairs(InfoFrame:GetChildren()) do
-        if c:IsA("TextLabel") or c:IsA("TextButton") then c:Destroy() end
-    end
+    for _, c in ipairs(InfoFrame:GetChildren()) do if c:IsA("TextLabel") or c:IsA("TextButton") then c:Destroy() end end
 end
 
 local function AddInfo(text, bold)
     local lbl = Instance.new("TextLabel")
     lbl.BackgroundTransparency = 1
     lbl.Size = UDim2.new(1, -12, 0, bold and 32 or 26)
-    lbl.Text = "  " .. text
+    lbl.Text = "  " .. tostring(text)  -- tostring extra por seguridad
     lbl.TextColor3 = bold and Color3.fromRGB(180, 200, 255) or Color3.new(1,1,1)
     lbl.TextScaled = true
     lbl.TextXAlignment = Enum.TextXAlignment.Left
@@ -200,21 +194,26 @@ local function GetFuncDetails(func)
     if type(func) ~= "function" then return {} end
     
     local info = debug.getinfo(func, "nSlu") or {}
-    local env = (pcall(getsenv, func) and getsenv(func)) or {}
-    local scriptName = env.script and env.script.Name or "Desconocido"
+    local envSuccess, env = pcall(getsenv, func)
+    local scriptObj = envSuccess and env and env.script or nil
+    local scriptName = "Desconocido"
+    
+    if scriptObj and typeof(scriptObj) == "Instance" then
+        scriptName = scriptObj.Name or "Instance sin nombre (" .. scriptObj.ClassName .. ")"
+    end
+    
     local isLua = islclosure and islclosure(func) or false
     local hash = (not isLua and getfunctionhash and pcall(getfunctionhash, func) and getfunctionhash(func)) or "N/A"
 
     local upvals = {}
     local consts = {}
 
-    -- Solo intentamos upvalues y constants si es una closure Lua
     if isLua then
         local i = 1
         while true do
             local success, name, val = pcall(debug.getupvalue, func, i)
             if not success or not name then break end
-            upvals[name] = type(val) == "table" and ("Table(" .. (type(val) == "table" and #val or "?") .. ")") or tostring(val)
+            upvals[name] = type(val) == "table" and ("Tabla(" .. (#val or "?") .. ")") or tostring(val)
             i = i + 1
         end
 
@@ -222,7 +221,7 @@ local function GetFuncDetails(func)
         while true do
             local success, c = pcall(debug.getconstant, func, i)
             if not success or c == nil then break end
-            table.insert(consts, type(c) == "string" and ('"' .. c .. '"') or tostring(c))
+            table.insert(consts, type(c) == "string" and ('"' .. tostring(c) .. '"') or tostring(c))
             i = i + 1
         end
     end
@@ -250,18 +249,18 @@ local function ShowDetails(obj, pos)
         if uvCount > 0 then
             AddInfo("Upvalues (" .. uvCount .. "):", true)
             for k, v in pairs(d.upvals) do
-                AddInfo("  " .. k .. " → " .. v)
+                AddInfo("  " .. tostring(k) .. " → " .. tostring(v))
             end
         end
 
         if #d.consts > 0 then
             AddInfo("Constants (" .. #d.consts .. "):", true)
             for _, c in ipairs(d.consts) do
-                AddInfo("  " .. c)
+                AddInfo("  " .. tostring(c))
             end
         end
 
-        -- Botones interactivos
+        -- Botones
         local HookBtn = Instance.new("TextButton")
         HookBtn.Size = UDim2.new(0.48, 0, 0, 48)
         HookBtn.BackgroundColor3 = Color3.fromRGB(255, 160, 50)
@@ -273,18 +272,17 @@ local function ShowDetails(obj, pos)
 
         HookBtn.MouseButton1Click:Connect(function()
             if hookfunction then
-                local old
                 local success, err = pcall(function()
-                    old = hookfunction(obj, function(...) 
+                    local old = hookfunction(obj, function(...) 
                         print("HOOK ["..pos.."] →", ...)
                         return old(...)
                     end)
                 end)
-                if success then
-                    game.StarterGui:SetCore("SendNotification", {Title = "GetGC", Text = "Hook aplicado", Duration = 3})
-                else
-                    game.StarterGui:SetCore("SendNotification", {Title = "Error", Text = "No se pudo hookear", Duration = 3})
-                end
+                game.StarterGui:SetCore("SendNotification", {
+                    Title = "GetGC",
+                    Text = success and "Hook aplicado" or "Error al hookear",
+                    Duration = 3
+                })
             end
         end)
 
@@ -337,9 +335,13 @@ local function UpdateList()
         local t = type(v)
         local desc = ""
         if t == "function" then
-            local env = pcall(getsenv, v) and getsenv(v) or {}
-            desc = env.script and env.script.Name or "anon"
-            if islclosure(v) then desc = "Lua: " .. desc end
+            local envSuccess, env = pcall(getsenv, v)
+            local scriptObj = envSuccess and env and env.script or nil
+            local namePart = "anon"
+            if scriptObj and typeof(scriptObj) == "Instance" then
+                namePart = scriptObj.Name or scriptObj.ClassName
+            end
+            desc = islclosure(v) and ("Lua: " .. namePart) or namePart
         elseif t == "table" then
             desc = #v .. " keys"
         elseif t == "string" then
@@ -391,6 +393,6 @@ RefreshBtn.MouseButton1Click:Connect(RefreshGC)
 CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
 SearchBox:GetPropertyChangedSignal("Text"):Connect(UpdateList)
 
--- Inicio automático
+-- Inicio
 RefreshGC()
-print("✅ GetGC Explorer v3.2 cargado y corregido")
+print("✅ GetGC Explorer v3.3 cargado (fix concatenación Instance)")
