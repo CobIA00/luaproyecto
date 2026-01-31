@@ -1,0 +1,482 @@
+-- GetGC Explorer Ultimate - Adaptado para Delta Executor (Android/iOS/PC 2026)
+-- Soporta filtergc, getsenv, islclosure, hookfunction, etc.
+-- GUI interactiva móvil-friendly: búsqueda, filtros, detalles completos (upvalues, constants, fenv), hook/execute/copy.
+-- Carga rápida con filtergc. Límite 2000 items para perf.
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local UserInputService = game:GetService("UserInputService")
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "GetGCExplorerDelta"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = PlayerGui
+
+local MainFrame = Instance.new("Frame")
+MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+MainFrame.Size = UDim2.new(0.95, 0, 0.95, 0)
+MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+MainFrame.BorderSizePixel = 0
+MainFrame.Parent = ScreenGui
+
+local UICornerMain = Instance.new("UICorner")
+UICornerMain.CornerRadius = UDim.new(0, 12)
+UICornerMain.Parent = MainFrame
+
+-- Drag (soporte touch/mouse)
+local dragging, dragStart, startPos
+local function updateInput(input)
+    local delta = input.Position - dragStart
+    MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+end
+
+-- TopBar
+local TopBar = Instance.new("Frame")
+TopBar.Size = UDim2.new(1, 0, 0, 60)
+TopBar.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+TopBar.BorderSizePixel = 0
+TopBar.Parent = MainFrame
+
+local UICornerTop = Instance.new("UICorner")
+UICornerTop.CornerRadius = UDim.new(0, 12)
+UICornerTop.Parent = TopBar
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(0.5, 0, 1, 0)
+Title.BackgroundTransparency = 1
+Title.Text = "🔍 GetGC Explorer - Delta v2.7+"
+Title.TextColor3 = Color3.new(1, 1, 1)
+Title.TextScaled = true
+Title.Font = Enum.Font.GothamBold
+Title.Parent = TopBar
+
+-- SearchBox
+local SearchBox = Instance.new("TextBox")
+SearchBox.Size = UDim2.new(0.35, 0, 0.7, 0)
+SearchBox.Position = UDim2.new(0.52, 0, 0.15, 0)
+SearchBox.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+SearchBox.BorderSizePixel = 0
+SearchBox.PlaceholderText = "Buscar por tipo/nombre/source..."
+SearchBox.Text = ""
+SearchBox.TextColor3 = Color3.new(1, 1, 1)
+SearchBox.PlaceholderColor3 = Color3.fromRGB(170, 170, 170)
+SearchBox.TextScaled = true
+SearchBox.Font = Enum.Font.GothamSemibold
+SearchBox.ClearTextOnFocus = false
+SearchBox.Parent = TopBar
+
+local UICornerSearch = Instance.new("UICorner")
+UICornerSearch.CornerRadius = UDim.new(0, 8)
+UICornerSearch.Parent = SearchBox
+
+-- Refresh Button
+local RefreshBtn = Instance.new("TextButton")
+RefreshBtn.Size = UDim2.new(0.12, 0, 0.7, 0)
+RefreshBtn.Position = UDim2.new(0.88, 0, 0.15, 0)
+RefreshBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+RefreshBtn.BorderSizePixel = 0
+RefreshBtn.Text = "🔄 Refresh"
+RefreshBtn.TextColor3 = Color3.new(1, 1, 1)
+RefreshBtn.TextScaled = true
+RefreshBtn.Font = Enum.Font.GothamBold
+RefreshBtn.Parent = TopBar
+
+local UICornerRefresh = Instance.new("UICorner")
+UICornerRefresh.CornerRadius = UDim.new(0, 8)
+UICornerRefresh.Parent = RefreshBtn
+
+-- Close Button
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 50, 0, 50)
+CloseBtn.Position = UDim2.new(1, -60, 0, 5)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(255, 80, 80)
+CloseBtn.BorderSizePixel = 0
+CloseBtn.Text = "❌"
+CloseBtn.TextColor3 = Color3.new(1, 1, 1)
+CloseBtn.TextScaled = true
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.Parent = TopBar
+
+local UICornerClose = Instance.new("UICorner")
+UICornerClose.CornerRadius = UDim.new(0, 25)
+UICornerClose.Parent = CloseBtn
+
+-- Tabs
+local TabsFrame = Instance.new("Frame")
+TabsFrame.Size = UDim2.new(1, 0, 0, 45)
+TabsFrame.Position = UDim2.new(0, 0, 60, 0)
+TabsFrame.BackgroundTransparency = 1
+TabsFrame.Parent = MainFrame
+
+local TabListLayout = Instance.new("UIListLayout")
+TabListLayout.FillDirection = Enum.FillDirection.Horizontal
+TabListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+TabListLayout.Padding = UDim.new(0, 8)
+TabListLayout.Parent = TabsFrame
+
+local tabNames = {"Todas", "Funciones", "Tablas", "Strings", "Userdata", "Threads"}
+local CurrentTab = "Todas"
+local TabBtns = {}
+
+local function GetFilterFunc(tab)
+    if tab == "Funciones" then return function(v) return type(v) == "function" end end
+    if tab == "Tablas" then return function(v) return type(v) == "table" end end
+    if tab == "Strings" then return function(v) return type(v) == "string" end end
+    if tab == "Userdata" then return function(v) return type(v) == "userdata" end end
+    if tab == "Threads" then return function(v) return type(v) == "thread" end end
+    return nil
+end
+
+for _, tab in ipairs(tabNames) do
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, 120, 1, 0)
+    btn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+    btn.BorderSizePixel = 0
+    btn.Text = tab
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.TextScaled = true
+    btn.Font = Enum.Font.GothamSemibold
+    btn.Parent = TabsFrame
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = btn
+    
+    btn.MouseButton1Click:Connect(function()
+        for _, b in pairs(TabBtns) do b.BackgroundColor3 = Color3.fromRGB(50, 50, 60) end
+        btn.BackgroundColor3 = Color3.fromRGB(70, 130, 255)
+        CurrentTab = tab
+        RefreshGC()
+    end)
+    
+    table.insert(TabBtns, btn)
+end
+
+-- ListFrame (izquierda)
+local ListFrame = Instance.new("ScrollingFrame")
+ListFrame.Size = UDim2.new(0.49, 0, 1, -115)
+ListFrame.Position = UDim2.new(0.005, 0, 0.13, 0)
+ListFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+ListFrame.BorderSizePixel = 0
+ListFrame.ScrollBarThickness = 6
+ListFrame.ScrollBarImageTransparency = 0.5
+ListFrame.Parent = MainFrame
+
+local ListCorner = Instance.new("UICorner")
+ListCorner.CornerRadius = UDim.new(0, 8)
+ListCorner.Parent = ListFrame
+
+local ListLayout = Instance.new("UIListLayout")
+ListLayout.Padding = UDim.new(0, 4)
+ListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+ListLayout.Parent = ListFrame
+
+-- InfoFrame (derecha)
+local InfoFrame = Instance.new("ScrollingFrame")
+InfoFrame.Size = UDim2.new(0.49, 0, 1, -115)
+InfoFrame.Position = UDim2.new(0.505, 0, 0.13, 0)
+InfoFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+InfoFrame.BorderSizePixel = 0
+InfoFrame.ScrollBarThickness = 6
+InfoFrame.ScrollBarImageTransparency = 0.5
+InfoFrame.Parent = MainFrame
+
+local InfoCorner = Instance.new("UICorner")
+InfoCorner.CornerRadius = UDim.new(0, 8)
+InfoCorner.Parent = InfoFrame
+
+local InfoLayout = Instance.new("UIListLayout")
+InfoLayout.Padding = UDim.new(0, 3)
+InfoLayout.SortOrder = Enum.SortOrder.LayoutOrder
+InfoLayout.Parent = InfoFrame
+
+-- Variables globales
+local FilteredList = {}
+local SelectedObj = nil
+local SelectedPos = nil
+local UpdateDebounce = false
+
+local function UpdateCanvas(frame, layout)
+    frame.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 20)
+end
+ListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() UpdateCanvas(ListFrame, ListLayout) end)
+InfoLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() UpdateCanvas(InfoFrame, InfoLayout) end)
+
+local function ClearList()
+    for _, child in ipairs(ListFrame:GetChildren()) do
+        if child:IsA("TextButton") then child:Destroy() end
+    end
+end
+
+local function ClearInfo()
+    for _, child in ipairs(InfoFrame:GetChildren()) do
+        if child:IsA("TextLabel") or child:IsA("TextButton") then child:Destroy() end
+    end
+end
+
+local function AddInfo(text, isBold)
+    local lbl = Instance.new("TextLabel")
+    lbl.BackgroundTransparency = 1
+    lbl.Size = UDim2.new(1, -10, 0, isBold and 35 or 28)
+    lbl.Text = "  " .. text
+    lbl.TextColor3 = isBold and Color3.fromRGB(200, 200, 255) or Color3.new(1, 1, 1)
+    lbl.TextScaled = true
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Font = isBold and Enum.Font.GothamBold or Enum.Font.Code
+    lbl.TextWrapped = true
+    lbl.Parent = InfoFrame
+    return lbl
+end
+
+local function GetFuncDetails(func)
+    local info = debug.getinfo(func, "nSlu")
+    local env = getsenv and getsenv(func)
+    local scriptName = env and env.script and (env.script.Name or env.script.ClassName) or "Desconocido"
+    local isLua = islclosure and islclosure(func) or false
+    local hash = isLua and nil or (getfunctionhash and getfunctionhash(func) or "N/A")
+    
+    local upvals = {}
+    local i = 1
+    while true do
+        local name, val = debug.getupvalue(func, i)
+        if not name then break end
+        upvals[name] = type(val) == "table" and ("Tabla(" .. #(val) .. ")") or tostring(val)
+        i += 1
+    end
+    
+    local consts = {}
+    i = 1
+    while true do
+        local c = debug.getconstant(func, i)
+        if c == nil then break end
+        table.insert(consts, type(c) == "string" and ('"' .. c .. '"') or tostring(c))
+        i += 1
+    end
+    
+    local fenvKeys = {}
+    if env then
+        for k, _ in pairs(env) do table.insert(fenvKeys, tostring(k)) end
+        table.sort(fenvKeys)
+    end
+    
+    return {
+        info = info,
+        scriptName = scriptName,
+        isLua = isLua,
+        hash = hash,
+        upvals = upvals,
+        consts = consts,
+        fenvKeys = fenvKeys
+    }
+end
+
+local function ShowDetails(obj, pos)
+    ClearInfo()
+    AddInfo("[" .. pos .. "/" .. #FilteredList .. "] " .. type(obj), true)
+    
+    if type(obj) == "function" then
+        local details = GetFuncDetails(obj)
+        AddInfo("📄 Script: " .. details.scriptName)
+        AddInfo("📛 Nombre: " .. (details.info.name or "Anónima"))
+        AddInfo("📏 Líneas: " .. details.info.linedefined .. " - " .. details.info.lastlinedefined)
+        AddInfo("🔗 Tipo: " .. (details.isLua and "Lua Closure" or "C Function" .. (details.hash and " (Hash: " .. details.hash .. ")" or "")))
+        
+        if next(details.upvals) then
+            AddInfo("📈 Upvalues (" .. #(pairs(details.upvals)) .. "):", true)
+            for name, val in pairs(details.upvals) do
+                AddInfo("  " .. name .. " → " .. val)
+            end
+        end
+        
+        if #details.consts > 0 then
+            AddInfo("⚙️ Constants (" .. #details.consts .. "):", true)
+            for _, c in ipairs(details.consts) do
+                AddInfo("  " .. c)
+            end
+        end
+        
+        if #details.fenvKeys > 0 then
+            AddInfo("🌍 Fenv Keys:", true)
+            for _, k in ipairs(details.fenvKeys) do
+                AddInfo("  " .. k)
+            end
+        end
+        
+        -- Botones interactivos
+        local btnSize = UDim2.new(0.48, 0, 0, 45)
+        
+        local HookBtn = Instance.new("TextButton")
+        HookBtn.Size = btnSize
+        HookBtn.Position = UDim2.new(0, 5, 1, -200)
+        HookBtn.BackgroundColor3 = Color3.fromRGB(255, 150, 0)
+        HookBtn.Text = "🔗 Hook (print args)"
+        HookBtn.TextScaled = true
+        HookBtn.Font = Enum.Font.GothamBold
+        HookBtn.Parent = InfoFrame
+        local HookCorner = Instance.new("UICorner"); HookCorner.CornerRadius = UDim.new(0,6); HookCorner.Parent = HookBtn
+        HookBtn.MouseButton1Click:Connect(function()
+            if hookfunction then
+                local old = hookfunction(obj, function(...) print("🪝 HOOK ["..pos.."]:", ...) return old(...) end)
+                game.StarterGui:SetCore("SendNotification", {Title="GetGC", Text="Función ["..pos.."] enganchada!", Duration=3})
+            end
+        end)
+        
+        local ExecBtn = Instance.new("TextButton")
+        ExecBtn.Size = btnSize
+        ExecBtn.Position = UDim2.new(0.52, 0, 1, -200)
+        ExecBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+        ExecBtn.Text = "▶️ Ejecutar"
+        ExecBtn.TextScaled = true
+        ExecBtn.Font = Enum.Font.GothamBold
+        ExecBtn.Parent = InfoFrame
+        local ExecCorner = Instance.new("UICorner"); ExecCorner.CornerRadius = UDim.new(0,6); ExecCorner.Parent = ExecBtn
+        ExecBtn.MouseButton1Click:Connect(function()
+            local ok, res = pcall(obj)
+            game.StarterGui:SetCore("SendNotification", {Title="GetGC", Text=ok and "Ejecutado OK" or "Error: " .. tostring(res), Duration=3})
+        end)
+        
+        local CopyBtn = Instance.new("TextButton")
+        CopyBtn.Size = UDim2.new(1, -10, 0, 45)
+        CopyBtn.Position = UDim2.new(0, 5, 1, -140)
+        CopyBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 255)
+        CopyBtn.Text = "📋 Copiar Info Completa"
+        CopyBtn.TextScaled = true
+        CopyBtn.Font = Enum.Font.GothamBold
+        CopyBtn.Parent = InfoFrame
+        local CopyCorner = Instance.new("UICorner"); CopyCorner.CornerRadius = UDim.new(0,6); CopyCorner.Parent = CopyBtn
+        CopyBtn.MouseButton1Click:Connect(function()
+            if setclipboard then
+                local txt = "GetGC ["..pos.."]\nScript: "..GetFuncDetails(obj).scriptName.."\nUpvals: "..table.concat(Object.keys(GetFuncDetails(obj).upvals), ", ")
+                setclipboard(txt)
+                game.StarterGui:SetCore("SendNotification", {Title="GetGC", Text="Info copiada al clipboard", Duration=2})
+            end
+        end)
+        
+    elseif type(obj) == "table" then
+        local keys = {}
+        for k in pairs(obj) do table.insert(keys, tostring(k)) end
+        table.sort(keys)
+        AddInfo("Claves (" .. #keys .. "): " .. table.concat(keys, ", "))
+        
+    elseif type(obj) == "string" then
+        local preview = #obj > 300 and obj:sub(1,300).."..." or obj
+        AddInfo("Longitud: " .. #obj)
+        AddInfo("Preview: " .. preview)
+        
+    else
+        AddInfo("Detalles: " .. tostring(obj))
+    end
+end
+
+local function UpdateList()
+    if UpdateDebounce then return end
+    UpdateDebounce = true
+    spawn(function() wait(0.2) UpdateDebounce = false end)
+    
+    local searchLower = string.lower(SearchBox.Text)
+    ClearList()
+    local shown = 0
+    
+    for pos, obj in ipairs(FilteredList) do
+        local t = type(obj)
+        local detail = ""
+        if t == "function" then
+            local info = debug.getinfo(obj)
+            local env = getsenv(obj)
+            detail = (env and env.script and env.script.Name or ""):match("([^/]+)$") or (info.name or "anon")
+            if islclosure(obj) then detail = "Lua: " .. detail end
+        elseif t == "table" then detail = #obj .. " keys"
+        elseif t == "string" then detail = #obj .. " chars"
+        end
+        
+        if searchLower == "" or string.find(string.lower(t .. detail), searchLower, 1, true) then
+            shown += 1
+            if shown > 2000 then break end
+            
+            local btn = Instance.new("TextButton")
+            btn.Name = tostring(pos)
+            btn.Size = UDim2.new(1, -12, 0, 50)
+            btn.BackgroundColor3 = Color3.fromRGB(55, 55, 70)
+            btn.BorderSizePixel = 0
+            btn.Text = "[" .. pos .. "/" .. #FilteredList .. "] " .. t .. (detail ~= "" and ": " .. detail:sub(1, 60) or "")
+            btn.TextColor3 = Color3.new(1, 1, 1)
+            btn.TextScaled = true
+            btn.Font = Enum.Font.Gotham
+            btn.TextWrapped = true
+            btn.Parent = ListFrame
+            
+            local btnCorner = Instance.new("UICorner")
+            btnCorner.CornerRadius = UDim.new(0, 6)
+            btnCorner.Parent = btn
+            
+            btn.MouseButton1Click:Connect(function()
+                SelectedPos = pos
+                SelectedObj = obj
+                ShowDetails(obj, pos)
+            end)
+            
+            btn.MouseEnter:Connect(function() btn.BackgroundColor3 = Color3.fromRGB(75, 75, 100) end)
+            btn.MouseLeave:Connect(function() btn.BackgroundColor3 = Color3.fromRGB(55, 55, 70) end)
+        end
+    end
+    
+    ClearInfo()
+    AddInfo("Mostrando " .. shown .. "/" .. #FilteredList .. " items", true)
+end
+
+function RefreshGC()
+    local startTime = tick()
+    ClearList()
+    ClearInfo()
+    AddInfo("Refrescando GC... (usa filtergc para speed)", true)
+    
+    local filterFunc = GetFilterFunc(CurrentTab)
+    if filterFunc then
+        FilteredList = filtergc(filterFunc)<grok:render card_id="12a7b8" card_type="citation_card" type="render_inline_citation"><argument name="citation_id">101</argument></grok:render><grok:render card_id="2b72b1" card_type="citation_card" type="render_inline_citation"><argument name="citation_id">102</argument></grok:render>
+    else
+        FilteredList = getgc()<grok:render card_id="2f32bf" card_type="citation_card" type="render_inline_citation"><argument name="citation_id">101</argument></grok:render>
+    end
+    
+    local elapsed = tick() - startTime
+    ClearInfo()
+    AddInfo(#FilteredList .. " objetos (" .. string.format("%.2fms", elapsed*1000) .. ")", true)
+    UpdateList()
+end
+
+-- Conexiones
+RefreshBtn.MouseButton1Click:Connect(RefreshGC)
+CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
+SearchBox:GetPropertyChangedSignal("Text"):Connect(UpdateList)
+
+TopBar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = MainFrame.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        updateInput(input)
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+-- Inicial
+RefreshGC()
+
+print("🚀 GetGC Explorer cargado! Usa la GUI para explorar/hookear. Optimizado para Delta (filtergc/getsenv).")<grok:render card_id="65f823" card_type="citation_card" type="render_inline_citation"><argument name="citation_id">101</argument></grok:render><grok:render card_id="8119c7" card_type="citation_card" type="render_inline_citation"><argument name="citation_id">102</argument></grok:render>
