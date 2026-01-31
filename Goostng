@@ -1,5 +1,5 @@
--- GetGC Explorer Ultimate v3.1 - Full & Fixed for Delta 2026
--- Compatible con tu versión (getgc, filtergc, getsenv, etc. funcionan)
+-- GetGC Explorer Ultimate v3.2 - Delta Executor 2026 (corregido para C functions)
+-- Protegido contra errores en debug.getupvalue y debug.getconstant
 
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
@@ -28,6 +28,12 @@ MainFrame.InputBegan:Connect(function(input)
         dragging = true
         dragStart = input.Position
         startPos = MainFrame.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
     end
 end)
 
@@ -35,12 +41,6 @@ UserInputService.InputChanged:Connect(function(input)
     if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
         local delta = input.Position - dragStart
         MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-    end
-end)
-
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = false
     end
 end)
 
@@ -54,7 +54,7 @@ Instance.new("UICorner", TopBar).CornerRadius = UDim.new(0, 14)
 local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(0.6, 0, 1, 0)
 Title.BackgroundTransparency = 1
-Title.Text = "🔍 GetGC Explorer v3.1 - Delta"
+Title.Text = "🔍 GetGC Explorer v3.2 - Delta"
 Title.TextColor3 = Color3.new(1,1,1)
 Title.TextScaled = true
 Title.Font = Enum.Font.GothamBold
@@ -139,7 +139,7 @@ for _, name in ipairs(tabNames) do
     table.insert(TabBtns, btn)
 end
 
--- List & Info
+-- List & Info Frames
 local ListFrame = Instance.new("ScrollingFrame")
 ListFrame.Size = UDim2.new(0.48, 0, 1, -105)
 ListFrame.Position = UDim2.new(0.01, 0, 0.14, 0)
@@ -172,11 +172,15 @@ InfoLayout.Padding = UDim.new(0, 4)
 InfoLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() UpdateCanvas(InfoFrame, InfoLayout) end)
 
 local function ClearList()
-    for _, c in ipairs(ListFrame:GetChildren()) do if c:IsA("TextButton") then c:Destroy() end end
+    for _, c in ipairs(ListFrame:GetChildren()) do
+        if c:IsA("TextButton") then c:Destroy() end
+    end
 end
 
 local function ClearInfo()
-    for _, c in ipairs(InfoFrame:GetChildren()) do if c:IsA("TextLabel") or c:IsA("TextButton") then c:Destroy() end end
+    for _, c in ipairs(InfoFrame:GetChildren()) do
+        if c:IsA("TextLabel") or c:IsA("TextButton") then c:Destroy() end
+    end
 end
 
 local function AddInfo(text, bold)
@@ -193,87 +197,130 @@ local function AddInfo(text, bold)
 end
 
 local function GetFuncDetails(func)
+    if type(func) ~= "function" then return {} end
+    
     local info = debug.getinfo(func, "nSlu") or {}
-    local env = pcall(getsenv, func) and getsenv(func) or {}
+    local env = (pcall(getsenv, func) and getsenv(func)) or {}
     local scriptName = env.script and env.script.Name or "Desconocido"
     local isLua = islclosure and islclosure(func) or false
-    local hash = not isLua and getfunctionhash and getfunctionhash(func) or "N/A"
+    local hash = (not isLua and getfunctionhash and pcall(getfunctionhash, func) and getfunctionhash(func)) or "N/A"
 
     local upvals = {}
-    local i = 1
-    while true do
-        local name, val = debug.getupvalue(func, i)
-        if not name then break end
-        upvals[name] = type(val) == "table" and ("Table("..#val..")") or tostring(val)
-        i += 1
-    end
-
     local consts = {}
-    i = 1
-    while true do
-        local c = debug.getconstant(func, i)
-        if c == nil then break end
-        table.insert(consts, type(c) == "string" and ('"'..c..'"') or tostring(c))
-        i += 1
+
+    -- Solo intentamos upvalues y constants si es una closure Lua
+    if isLua then
+        local i = 1
+        while true do
+            local success, name, val = pcall(debug.getupvalue, func, i)
+            if not success or not name then break end
+            upvals[name] = type(val) == "table" and ("Table(" .. (type(val) == "table" and #val or "?") .. ")") or tostring(val)
+            i = i + 1
+        end
+
+        i = 1
+        while true do
+            local success, c = pcall(debug.getconstant, func, i)
+            if not success or c == nil then break end
+            table.insert(consts, type(c) == "string" and ('"' .. c .. '"') or tostring(c))
+            i = i + 1
+        end
     end
 
-    return {scriptName = scriptName, isLua = isLua, hash = hash, upvals = upvals, consts = consts}
+    return {
+        scriptName = scriptName,
+        isLua = isLua,
+        hash = hash,
+        upvals = upvals,
+        consts = consts
+    }
 end
 
 local function ShowDetails(obj, pos)
     ClearInfo()
-    AddInfo("["..pos.."/"..#FilteredList.."] "..type(obj), true)
+    AddInfo("[" .. pos .. "/" .. #FilteredList .. "] " .. type(obj), true)
 
     if type(obj) == "function" then
         local d = GetFuncDetails(obj)
-        AddInfo("Script: "..d.scriptName)
-        AddInfo("Tipo: "..(d.isLua and "Lua" or "C (Hash: "..d.hash..")"))
+        AddInfo("Script: " .. d.scriptName)
+        AddInfo("Tipo: " .. (d.isLua and "Lua Closure" or "C Function (Hash: " .. d.hash .. ")"))
 
         local uvCount = 0
-        for _ in pairs(d.upvals) do uvCount += 1 end
+        for _ in pairs(d.upvals) do uvCount = uvCount + 1 end
         if uvCount > 0 then
-            AddInfo("Upvalues ("..uvCount.."):", true)
-            for k, v in pairs(d.upvals) do AddInfo("  "..k.." → "..v) end
+            AddInfo("Upvalues (" .. uvCount .. "):", true)
+            for k, v in pairs(d.upvals) do
+                AddInfo("  " .. k .. " → " .. v)
+            end
         end
 
-        -- Botones
-        local hookBtn = Instance.new("TextButton")
-        hookBtn.Size = UDim2.new(0.48, 0, 0, 48)
-        hookBtn.BackgroundColor3 = Color3.fromRGB(255, 160, 50)
-        hookBtn.Text = "🔗 Hook (print args)"
-        hookBtn.TextScaled = true
-        hookBtn.Font = Enum.Font.GothamBold
-        hookBtn.Parent = InfoFrame
-        Instance.new("UICorner", hookBtn).CornerRadius = UDim.new(0, 6)
-        hookBtn.MouseButton1Click:Connect(function()
+        if #d.consts > 0 then
+            AddInfo("Constants (" .. #d.consts .. "):", true)
+            for _, c in ipairs(d.consts) do
+                AddInfo("  " .. c)
+            end
+        end
+
+        -- Botones interactivos
+        local HookBtn = Instance.new("TextButton")
+        HookBtn.Size = UDim2.new(0.48, 0, 0, 48)
+        HookBtn.BackgroundColor3 = Color3.fromRGB(255, 160, 50)
+        HookBtn.Text = "🔗 Hook (print args)"
+        HookBtn.TextScaled = true
+        HookBtn.Font = Enum.Font.GothamBold
+        HookBtn.Parent = InfoFrame
+        Instance.new("UICorner", HookBtn).CornerRadius = UDim.new(0, 6)
+
+        HookBtn.MouseButton1Click:Connect(function()
             if hookfunction then
-                local old = hookfunction(obj, function(...) print("HOOK ["..pos.."]", ...) return old(...) end)
-                game.StarterGui:SetCore("SendNotification", {Title = "GetGC", Text = "Hook aplicado", Duration = 3})
+                local old
+                local success, err = pcall(function()
+                    old = hookfunction(obj, function(...) 
+                        print("HOOK ["..pos.."] →", ...)
+                        return old(...)
+                    end)
+                end)
+                if success then
+                    game.StarterGui:SetCore("SendNotification", {Title = "GetGC", Text = "Hook aplicado", Duration = 3})
+                else
+                    game.StarterGui:SetCore("SendNotification", {Title = "Error", Text = "No se pudo hookear", Duration = 3})
+                end
             end
         end)
 
-        local execBtn = Instance.new("TextButton")
-        execBtn.Size = UDim2.new(0.48, 0, 0, 48)
-        execBtn.Position = UDim2.new(0.52, 0, 0, 0)
-        execBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
-        execBtn.Text = "▶️ Ejecutar"
-        execBtn.TextScaled = true
-        execBtn.Font = Enum.Font.GothamBold
-        execBtn.Parent = InfoFrame
-        Instance.new("UICorner", execBtn).CornerRadius = UDim.new(0, 6)
-        execBtn.MouseButton1Click:Connect(function()
-            local ok, err = pcall(obj)
-            game.StarterGui:SetCore("SendNotification", {Title = "GetGC", Text = ok and "OK" or "Error: "..tostring(err), Duration = 3})
+        local ExecBtn = Instance.new("TextButton")
+        ExecBtn.Size = UDim2.new(0.48, 0, 0, 48)
+        ExecBtn.Position = UDim2.new(0.52, 0, 0, 0)
+        ExecBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+        ExecBtn.Text = "▶️ Ejecutar"
+        ExecBtn.TextScaled = true
+        ExecBtn.Font = Enum.Font.GothamBold
+        ExecBtn.Parent = InfoFrame
+        Instance.new("UICorner", ExecBtn).CornerRadius = UDim.new(0, 6)
+
+        ExecBtn.MouseButton1Click:Connect(function()
+            local success, result = pcall(obj)
+            game.StarterGui:SetCore("SendNotification", {
+                Title = "GetGC",
+                Text = success and "Ejecutado OK" or "Error: " .. tostring(result),
+                Duration = 4
+            })
         end)
 
     elseif type(obj) == "table" then
         local keys = {}
         for k in pairs(obj) do table.insert(keys, tostring(k)) end
         table.sort(keys)
-        AddInfo("Keys: " .. table.concat(keys, ", ", 1, 12) .. (#keys > 12 and " ..." or ""))
+        local preview = table.concat(keys, ", ", 1, math.min(12, #keys))
+        if #keys > 12 then preview = preview .. " ..." end
+        AddInfo("Claves (" .. #keys .. "): " .. preview)
+
     elseif type(obj) == "string" then
-        AddInfo("Length: " .. #obj)
-        AddInfo("Preview: " .. (obj:sub(1, 200) .. (#obj > 200 and "..." or "")))
+        AddInfo("Longitud: " .. #obj)
+        AddInfo("Vista previa: " .. (obj:sub(1, 180) .. (#obj > 180 and "..." or "")))
+
+    else
+        AddInfo("Valor: " .. tostring(obj))
     end
 end
 
@@ -291,27 +338,31 @@ local function UpdateList()
         local desc = ""
         if t == "function" then
             local env = pcall(getsenv, v) and getsenv(v) or {}
-            desc = (env.script and env.script.Name or "anon")
+            desc = env.script and env.script.Name or "anon"
             if islclosure(v) then desc = "Lua: " .. desc end
-        elseif t == "table" then desc = #v .. " keys"
-        elseif t == "string" then desc = #v .. " chars"
+        elseif t == "table" then
+            desc = #v .. " keys"
+        elseif t == "string" then
+            desc = #v .. " chars"
         end
 
         if term == "" or string.find(string.lower(t .. desc), term, 1, true) then
-            count += 1
+            count = count + 1
             if count > 2000 then break end
 
             local btn = Instance.new("TextButton")
             btn.Size = UDim2.new(1, -12, 0, 48)
             btn.BackgroundColor3 = Color3.fromRGB(55, 55, 72)
-            btn.Text = "["..i.."] " .. t .. (desc ~= "" and ": " .. desc:sub(1,55) or "")
+            btn.Text = "[" .. i .. "] " .. t .. (desc ~= "" and ": " .. desc:sub(1,55) or "")
             btn.TextColor3 = Color3.new(1,1,1)
             btn.TextScaled = true
             btn.Font = Enum.Font.Gotham
             btn.Parent = ListFrame
             Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
 
-            btn.MouseButton1Click:Connect(function() ShowDetails(v, i) end)
+            btn.MouseButton1Click:Connect(function()
+                ShowDetails(v, i)
+            end)
         end
     end
 
@@ -340,6 +391,6 @@ RefreshBtn.MouseButton1Click:Connect(RefreshGC)
 CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
 SearchBox:GetPropertyChangedSignal("Text"):Connect(UpdateList)
 
--- Inicio
+-- Inicio automático
 RefreshGC()
-print("✅ GetGC Explorer v3.1 cargado correctamente")
+print("✅ GetGC Explorer v3.2 cargado y corregido")
