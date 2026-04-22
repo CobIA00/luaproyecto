@@ -1,398 +1,118 @@
--- GetGC Explorer Ultimate v3.3 - Delta Executor 2026 (corregido Instance concatenation)
--- Fix: tostring() en scriptName y más protecciones
+[GROK-RAW] -- Extractor Total Seguro para Delta Executor
 
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-local UserInputService = game:GetService("UserInputService")
+local player = game.Players.LocalPlayer
+local extractData = {}
 
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "GetGCExplorer"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.Parent = PlayerGui
-
-local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0.92, 0, 0.92, 0)
-MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
-MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-MainFrame.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
-MainFrame.BorderSizePixel = 0
-MainFrame.Parent = ScreenGui
-
-Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 14)
-
--- Drag
-local dragging, dragStart, startPos
-MainFrame.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dragStart = input.Position
-        startPos = MainFrame.Position
-        
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then dragging = false end
-        end)
-    end
-end)
-
-UserInputService.InputChanged:Connect(function(input)
-    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-        local delta = input.Position - dragStart
-        MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-    end
-end)
-
--- Top Bar
-local TopBar = Instance.new("Frame")
-TopBar.Size = UDim2.new(1, 0, 0, 55)
-TopBar.BackgroundColor3 = Color3.fromRGB(20, 20, 32)
-TopBar.Parent = MainFrame
-Instance.new("UICorner", TopBar).CornerRadius = UDim.new(0, 14)
-
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(0.6, 0, 1, 0)
-Title.BackgroundTransparency = 1
-Title.Text = "🔍 GetGC Explorer v3.3 - Delta"
-Title.TextColor3 = Color3.new(1,1,1)
-Title.TextScaled = true
-Title.Font = Enum.Font.GothamBold
-Title.Parent = TopBar
-
-local SearchBox = Instance.new("TextBox")
-SearchBox.Size = UDim2.new(0.32, 0, 0.65, 0)
-SearchBox.Position = UDim2.new(0.55, 0, 0.17, 0)
-SearchBox.BackgroundColor3 = Color3.fromRGB(45, 45, 58)
-SearchBox.PlaceholderText = "Buscar tipo / nombre / script..."
-SearchBox.Text = ""
-SearchBox.TextColor3 = Color3.new(1,1,1)
-SearchBox.TextScaled = true
-SearchBox.Font = Enum.Font.Gotham
-SearchBox.Parent = TopBar
-Instance.new("UICorner", SearchBox).CornerRadius = UDim.new(0, 8)
-
-local RefreshBtn = Instance.new("TextButton")
-RefreshBtn.Size = UDim2.new(0.12, 0, 0.65, 0)
-RefreshBtn.Position = UDim2.new(0.88, 0, 0.17, 0)
-RefreshBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 90)
-RefreshBtn.Text = "🔄 Cargar GC"
-RefreshBtn.TextColor3 = Color3.new(1,1,1)
-RefreshBtn.TextScaled = true
-RefreshBtn.Font = Enum.Font.GothamBold
-RefreshBtn.Parent = TopBar
-Instance.new("UICorner", RefreshBtn).CornerRadius = UDim.new(0, 8)
-
-local CloseBtn = Instance.new("TextButton")
-CloseBtn.Size = UDim2.new(0, 45, 0, 45)
-CloseBtn.Position = UDim2.new(1, -52, 0, 5)
-CloseBtn.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
-CloseBtn.Text = "✕"
-CloseBtn.TextColor3 = Color3.new(1,1,1)
-CloseBtn.TextScaled = true
-CloseBtn.Font = Enum.Font.GothamBold
-CloseBtn.Parent = TopBar
-Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 22)
-
--- Tabs
-local TabsFrame = Instance.new("Frame")
-TabsFrame.Size = UDim2.new(1, 0, 0, 40)
-TabsFrame.Position = UDim2.new(0, 0, 55, 0)
-TabsFrame.BackgroundTransparency = 1
-TabsFrame.Parent = MainFrame
-
-local TabLayout = Instance.new("UIListLayout", TabsFrame)
-TabLayout.FillDirection = Enum.FillDirection.Horizontal
-TabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-TabLayout.Padding = UDim.new(0, 6)
-
-local tabNames = {"Todas", "Funciones", "Tablas", "Strings", "Userdata", "Threads"}
-local CurrentTab = "Todas"
-local TabBtns = {}
-
-local function GetFilterFunc(tab)
-    if tab == "Funciones" then return function(v) return type(v) == "function" end end
-    if tab == "Tablas" then return function(v) return type(v) == "table" end end
-    if tab == "Strings" then return function(v) return type(v) == "string" end end
-    if tab == "Userdata" then return function(v) return type(v) == "userdata" end end
-    if tab == "Threads" then return function(v) return type(v) == "thread" end end
-    return nil
-end
-
-for _, name in ipairs(tabNames) do
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0, 110, 1, 0)
-    btn.BackgroundColor3 = Color3.fromRGB(50, 50, 65)
-    btn.Text = name
-    btn.TextColor3 = Color3.new(1,1,1)
-    btn.TextScaled = true
-    btn.Font = Enum.Font.GothamSemibold
-    btn.Parent = TabsFrame
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
-
-    btn.MouseButton1Click:Connect(function()
-        for _, b in pairs(TabBtns) do b.BackgroundColor3 = Color3.fromRGB(50, 50, 65) end
-        btn.BackgroundColor3 = Color3.fromRGB(70, 130, 255)
-        CurrentTab = name
-        RefreshGC()
-    end)
-    table.insert(TabBtns, btn)
-end
-
--- List & Info
-local ListFrame = Instance.new("ScrollingFrame")
-ListFrame.Size = UDim2.new(0.48, 0, 1, -105)
-ListFrame.Position = UDim2.new(0.01, 0, 0.14, 0)
-ListFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 48)
-ListFrame.ScrollBarThickness = 6
-ListFrame.Parent = MainFrame
-Instance.new("UICorner", ListFrame).CornerRadius = UDim.new(0, 10)
-
-local InfoFrame = Instance.new("ScrollingFrame")
-InfoFrame.Size = UDim2.new(0.48, 0, 1, -105)
-InfoFrame.Position = UDim2.new(0.51, 0, 0.14, 0)
-InfoFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 48)
-InfoFrame.ScrollBarThickness = 6
-InfoFrame.Parent = MainFrame
-Instance.new("UICorner", InfoFrame).CornerRadius = UDim.new(0, 10)
-
-local FilteredList = {}
-local UpdateDebounce = false
-
-local function UpdateCanvas(frame, layout)
-    frame.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 50)
-end
-
-local ListLayout = Instance.new("UIListLayout", ListFrame)
-ListLayout.Padding = UDim.new(0, 4)
-ListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() UpdateCanvas(ListFrame, ListLayout) end)
-
-local InfoLayout = Instance.new("UIListLayout", InfoFrame)
-InfoLayout.Padding = UDim.new(0, 4)
-InfoLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() UpdateCanvas(InfoFrame, InfoLayout) end)
-
-local function ClearList()
-    for _, c in ipairs(ListFrame:GetChildren()) do if c:IsA("TextButton") then c:Destroy() end end
-end
-
-local function ClearInfo()
-    for _, c in ipairs(InfoFrame:GetChildren()) do if c:IsA("TextLabel") or c:IsA("TextButton") then c:Destroy() end end
-end
-
-local function AddInfo(text, bold)
-    local lbl = Instance.new("TextLabel")
-    lbl.BackgroundTransparency = 1
-    lbl.Size = UDim2.new(1, -12, 0, bold and 32 or 26)
-    lbl.Text = "  " .. tostring(text)  -- tostring extra por seguridad
-    lbl.TextColor3 = bold and Color3.fromRGB(180, 200, 255) or Color3.new(1,1,1)
-    lbl.TextScaled = true
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.Font = bold and Enum.Font.GothamBold or Enum.Font.Code
-    lbl.TextWrapped = true
-    lbl.Parent = InfoFrame
-end
-
-local function GetFuncDetails(func)
-    if type(func) ~= "function" then return {} end
-    
-    local info = debug.getinfo(func, "nSlu") or {}
-    local envSuccess, env = pcall(getsenv, func)
-    local scriptObj = envSuccess and env and env.script or nil
-    local scriptName = "Desconocido"
-    
-    if scriptObj and typeof(scriptObj) == "Instance" then
-        scriptName = scriptObj.Name or "Instance sin nombre (" .. scriptObj.ClassName .. ")"
-    end
-    
-    local isLua = islclosure and islclosure(func) or false
-    local hash = (not isLua and getfunctionhash and pcall(getfunctionhash, func) and getfunctionhash(func)) or "N/A"
-
-    local upvals = {}
-    local consts = {}
-
-    if isLua then
-        local i = 1
-        while true do
-            local success, name, val = pcall(debug.getupvalue, func, i)
-            if not success or not name then break end
-            upvals[name] = type(val) == "table" and ("Tabla(" .. (#val or "?") .. ")") or tostring(val)
-            i = i + 1
-        end
-
-        i = 1
-        while true do
-            local success, c = pcall(debug.getconstant, func, i)
-            if not success or c == nil then break end
-            table.insert(consts, type(c) == "string" and ('"' .. tostring(c) .. '"') or tostring(c))
-            i = i + 1
-        end
-    end
-
-    return {
-        scriptName = scriptName,
-        isLua = isLua,
-        hash = hash,
-        upvals = upvals,
-        consts = consts
-    }
-end
-
-local function ShowDetails(obj, pos)
-    ClearInfo()
-    AddInfo("[" .. pos .. "/" .. #FilteredList .. "] " .. type(obj), true)
-
-    if type(obj) == "function" then
-        local d = GetFuncDetails(obj)
-        AddInfo("Script: " .. d.scriptName)
-        AddInfo("Tipo: " .. (d.isLua and "Lua Closure" or "C Function (Hash: " .. d.hash .. ")"))
-
-        local uvCount = 0
-        for _ in pairs(d.upvals) do uvCount = uvCount + 1 end
-        if uvCount > 0 then
-            AddInfo("Upvalues (" .. uvCount .. "):", true)
-            for k, v in pairs(d.upvals) do
-                AddInfo("  " .. tostring(k) .. " → " .. tostring(v))
-            end
-        end
-
-        if #d.consts > 0 then
-            AddInfo("Constants (" .. #d.consts .. "):", true)
-            for _, c in ipairs(d.consts) do
-                AddInfo("  " .. tostring(c))
-            end
-        end
-
-        -- Botones
-        local HookBtn = Instance.new("TextButton")
-        HookBtn.Size = UDim2.new(0.48, 0, 0, 48)
-        HookBtn.BackgroundColor3 = Color3.fromRGB(255, 160, 50)
-        HookBtn.Text = "🔗 Hook (print args)"
-        HookBtn.TextScaled = true
-        HookBtn.Font = Enum.Font.GothamBold
-        HookBtn.Parent = InfoFrame
-        Instance.new("UICorner", HookBtn).CornerRadius = UDim.new(0, 6)
-
-        HookBtn.MouseButton1Click:Connect(function()
-            if hookfunction then
-                local success, err = pcall(function()
-                    local old = hookfunction(obj, function(...) 
-                        print("HOOK ["..pos.."] →", ...)
-                        return old(...)
-                    end)
-                end)
-                game.StarterGui:SetCore("SendNotification", {
-                    Title = "GetGC",
-                    Text = success and "Hook aplicado" or "Error al hookear",
-                    Duration = 3
-                })
-            end
-        end)
-
-        local ExecBtn = Instance.new("TextButton")
-        ExecBtn.Size = UDim2.new(0.48, 0, 0, 48)
-        ExecBtn.Position = UDim2.new(0.52, 0, 0, 0)
-        ExecBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
-        ExecBtn.Text = "▶️ Ejecutar"
-        ExecBtn.TextScaled = true
-        ExecBtn.Font = Enum.Font.GothamBold
-        ExecBtn.Parent = InfoFrame
-        Instance.new("UICorner", ExecBtn).CornerRadius = UDim.new(0, 6)
-
-        ExecBtn.MouseButton1Click:Connect(function()
-            local success, result = pcall(obj)
-            game.StarterGui:SetCore("SendNotification", {
-                Title = "GetGC",
-                Text = success and "Ejecutado OK" or "Error: " .. tostring(result),
-                Duration = 4
-            })
-        end)
-
-    elseif type(obj) == "table" then
-        local keys = {}
-        for k in pairs(obj) do table.insert(keys, tostring(k)) end
-        table.sort(keys)
-        local preview = table.concat(keys, ", ", 1, math.min(12, #keys))
-        if #keys > 12 then preview = preview .. " ..." end
-        AddInfo("Claves (" .. #keys .. "): " .. preview)
-
-    elseif type(obj) == "string" then
-        AddInfo("Longitud: " .. #obj)
-        AddInfo("Vista previa: " .. (obj:sub(1, 180) .. (#obj > 180 and "..." or "")))
-
-    else
-        AddInfo("Valor: " .. tostring(obj))
-    end
-end
-
-local function UpdateList()
-    if UpdateDebounce then return end
-    UpdateDebounce = true
-    task.delay(0.2, function() UpdateDebounce = false end)
-
-    local term = string.lower(SearchBox.Text)
-    ClearList()
-    local count = 0
-
-    for i, v in ipairs(FilteredList) do
-        local t = type(v)
-        local desc = ""
-        if t == "function" then
-            local envSuccess, env = pcall(getsenv, v)
-            local scriptObj = envSuccess and env and env.script or nil
-            local namePart = "anon"
-            if scriptObj and typeof(scriptObj) == "Instance" then
-                namePart = scriptObj.Name or scriptObj.ClassName
-            end
-            desc = islclosure(v) and ("Lua: " .. namePart) or namePart
-        elseif t == "table" then
-            desc = #v .. " keys"
-        elseif t == "string" then
-            desc = #v .. " chars"
-        end
-
-        if term == "" or string.find(string.lower(t .. desc), term, 1, true) then
-            count = count + 1
-            if count > 2000 then break end
-
-            local btn = Instance.new("TextButton")
-            btn.Size = UDim2.new(1, -12, 0, 48)
-            btn.BackgroundColor3 = Color3.fromRGB(55, 55, 72)
-            btn.Text = "[" .. i .. "] " .. t .. (desc ~= "" and ": " .. desc:sub(1,55) or "")
-            btn.TextColor3 = Color3.new(1,1,1)
-            btn.TextScaled = true
-            btn.Font = Enum.Font.Gotham
-            btn.Parent = ListFrame
-            Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
-
-            btn.MouseButton1Click:Connect(function()
-                ShowDetails(v, i)
+-- Función segura para deep scan de instancias (evita crashes y detección)
+local function safeDeepScan(parent, maxDepth, currentDepth)
+    currentDepth = currentDepth or 0
+    if currentDepth > maxDepth then return end
+    pcall(function()
+        for _, child in ipairs(parent:GetChildren()) do
+            local entry = {
+                Name = child.Name,
+                ClassName = child.ClassName,
+                Properties = {}
+            }
+            -- Extraer propiedades comunes de forma segura
+            pcall(function()
+                for _, prop in ipairs({"Value", "Text", "Position", "Size", "Enabled", "Visible"}) do
+                    if pcall(function() return child[prop] end) then
+                        entry.Properties[prop] = tostring(child[prop])
+                    end
+                end
             end)
+            if child:IsA("ValueBase") then
+                entry.Value = child.Value
+            end
+            if not extractData[parent.ClassName] then extractData[parent.ClassName] = {} end
+            table.insert(extractData[parent.ClassName], entry)
+            safeDeepScan(child, maxDepth, currentDepth + 1)
+        end
+    end)
+end
+
+-- Extraer info del jugador y stats
+pcall(function()
+    extractData.PlayerInfo = {
+        UserId = player.UserId,
+        Name = player.Name,
+        DisplayName = player.DisplayName,
+        Team = player.Team and player.Team.Name or "None",
+        Character = player.Character and player.Character.Name or "No Character"
+    }
+    
+    -- Stats comunes en juegos (ajusta según el juego)
+    extractData.Stats = {}
+    for _, v in ipairs(game:GetDescendants()) do
+        pcall(function()
+            if v:IsA("IntValue") or v:IsA("NumberValue") or v:IsA("StringValue") then
+                if v.Parent and (v.Parent == player or v.Parent.Parent == player) then
+                    extractData.Stats[v.Name] = v.Value
+                end
+            end
+        end)
+    end
+end)
+
+-- Escanear ReplicatedStorage, Workspace, etc. (limitado para seguridad)
+safeDeepScan(game.ReplicatedStorage, 5)
+safeDeepScan(game.Workspace, 4)
+safeDeepScan(game.Players, 3)
+
+-- Buscar Remotes y Bindables de forma segura (para autofarm futuro)
+extractData.Remotes = {}
+pcall(function()
+    for _, obj in ipairs(game:GetDescendants()) do
+        if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") or obj:IsA("BindableEvent") then
+            table.insert(extractData.Remotes, {
+                Name = obj.Name,
+                Class = obj.ClassName,
+                ParentPath = obj:GetFullName()
+            })
         end
     end
+end)
 
-    ClearInfo()
-    AddInfo("Mostrando " .. count .. " / " .. #FilteredList, true)
-end
-
-function RefreshGC()
-    ClearList()
-    ClearInfo()
-    AddInfo("Cargando GC...", true)
-
-    local filter = GetFilterFunc(CurrentTab)
-    if filter and filtergc then
-        FilteredList = filtergc(filter)
-    else
-        FilteredList = getgc()
+-- Dump a JSON-like para análisis (fácil de copiar o guardar)
+local function tableToString(t, indent)
+    indent = indent or ""
+    local str = "{\n"
+    for k, v in pairs(t) do
+        local key = type(k) == "string" and '"'..k..'"' or k
+        if type(v) == "table" then
+            str = str .. indent .. "  " .. key .. " = " .. tableToString(v, indent .. "  ") .. ",\n"
+        else
+            local val = type(v) == "string" and '"'..v..'"' or tostring(v)
+            str = str .. indent .. "  " .. key .. " = " .. val .. ",\n"
+        end
     end
-
-    AddInfo(#FilteredList .. " objetos cargados", true)
-    UpdateList()
+    return str .. indent .. "}"
 end
 
--- Conexiones
-RefreshBtn.MouseButton1Click:Connect(RefreshGC)
-CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
-SearchBox:GetPropertyChangedSignal("Text"):Connect(UpdateList)
+print("=== EXTRACTOR TOTAL COMPLETADO - DATOS DEL CLIENTE ===")
+print(tableToString(extractData))
+print("=== COPIA ESTO PARA ANÁLISIS Y AUTOFARM ===")
 
--- Inicio
-RefreshGC()
-print("✅ GetGC Explorer v3.3 cargado (fix concatenación Instance)")
+-- Opcional: Guardar en un StringValue temporal (invisible para análisis)
+pcall(function()
+    local dataHolder = Instance.new("StringValue")
+    dataHolder.Name = "ExtractedData_" .. math.random(100000,999999)
+    dataHolder.Value = tableToString(extractData)
+    dataHolder.Parent = player:WaitForChild("PlayerGui") -- o un lugar oculto
+    print("Datos guardados en instancia temporal para scripts posteriores")
+end)
+
+-- Para autofarm: ejemplo base seguro (usa los remotes extraídos)
+-- Ajusta según tu juego. Siempre con randomization y checks.
+local function safeAutoFarm(remoteName, args)
+    pcall(function()
+        local remote = game:FindFirstChild(remoteName, true) or nil
+        if remote and remote:IsA("RemoteEvent") then
+            wait(math.random(0.5, 1.5)) -- human delay
+            remote:FireServer(unpack(args))
+        end
+    end)
+end
+
+-- Ejemplo de uso futuro: safeAutoFarm("CollectItem", {itemId = 123})
