@@ -1,97 +1,215 @@
---[GROK-SECURE v2.1] -- 适配 Delta Executor，增强启动安全性
+--[ TOTAL CLIENT EXTRACTOR ULTIMATE ]--
+-- Extrae TODO lo accesible por el cliente, incluyendo código fuente.
 
--- 1. 等待游戏完全加载，避免 LocalPlayer 为 nil
-if not game:IsLoaded() then
-    game.Loaded:Wait()
-end
-
--- 2. 安全等待 LocalPlayer 出现（部分游戏需要角色加载后才可用）
-local player = nil
-repeat
-    task.wait(0.5)
-    player = game:GetService("Players").LocalPlayer
-until player
-
-print("✅ 玩家已加载: " .. player.Name)
-
--- 以下为完整提取器代码（已包含之前的安全措施，无需修改）
--- ============================================================
 local CONFIG = {
-    MaxDepth = 3,
-    SafeMode = true,
-    RandomizeDelays = true,
-    UseDeltaFeatures = true
+    MaxDepth = 5,
+    ExtractSource = true,        -- Extraer código de LocalScript/ModuleScript
+    ExtractPhysics = true,       -- Extraer configuración de físicas
+    ScanAllServices = true,      -- Escanear TODOS los servicios
+    OutputJSON = true
 }
 
-local SafeUtils = {}
-function SafeUtils:SafeCall(func, ...)
-    local success, result = pcall(func, ...)
-    return success, result
+-- ==================== 工具函数 ====================
+local Safe = {}
+function Safe:pcall(...) local s,r = pcall(...) return s,r end
+function Safe:serialize(v)
+    local t = type(v)
+    if t == "string" or t == "number" or t == "boolean" then return v
+    elseif t == "table" then
+        local out = {}
+        for k,val in pairs(v) do out[tostring(k)] = Safe:serialize(val) end
+        return out
+    else return tostring(v) end
 end
 
-function SafeUtils:HumanDelay(baseDelay)
-    if not CONFIG.RandomizeDelays then
-        task.wait(baseDelay or 0.5)
-        return
+-- 获取源码（需 Delta 环境支持 getsource 或 getscriptclosure）
+function Safe:getScriptSource(scriptObj)
+    if not CONFIG.ExtractSource then return nil end
+    local source = nil
+    Safe:pcall(function()
+        if getscriptclosure and type(getscriptclosure) == "function" then
+            -- 某些执行器提供此函数
+            local f = getscriptclosure(scriptObj)
+            source = debug and debug.getinfo and debug.getinfo(f) and debug.getinfo(f).source
+        elseif getsource and type(getsource) == "function" then
+            source = getsource(scriptObj)
+        elseif scriptObj.Source then
+            source = scriptObj.Source
+        end
+    end)
+    return source
+end
+
+-- ==================== 主提取器 ====================
+local Extractor = { Data = {} }
+
+-- 1. 元信息
+Extractor.Data.Meta = {
+    GameId = game.GameId,
+    PlaceId = game.PlaceId,
+    JobId = game.JobId,
+    Timestamp = os.time(),
+    PlayerCount = #game.Players:GetPlayers()
+}
+
+-- 2. 玩家完整数据（增强版）
+local player = game.Players.LocalPlayer
+repeat task.wait() until player and player.Character
+
+local playerData = {
+    UserId = player.UserId,
+    Name = player.Name,
+    DisplayName = player.DisplayName,
+    Team = player.Team and player.Team.Name,
+    Character = player.Character and player.Character.Name,
+    Backpack = {},
+    PlayerGui = {},
+    PlayerScripts = {},
+    Values = {}
+}
+
+-- 玩家下的所有 Value 对象
+for _, v in ipairs(player:GetChildren()) do
+    if v:IsA("ValueBase") then
+        playerData.Values[v.Name] = Safe:serialize(v.Value)
     end
-    local minDelay = baseDelay and (baseDelay * 0.8) or 0.4
-    local maxDelay = baseDelay and (baseDelay * 1.5) or 0.8
-    task.wait(minDelay + math.random() * (maxDelay - minDelay))
 end
 
--- 主提取器对象
-local Extractor = {
-    Data = {
-        PlayerInfo = {},
-        Remotes = {},
-        GameStructure = {},
-        Stats = {}
-    }
-}
+-- Backpack 工具
+local bp = player:FindFirstChild("Backpack")
+if bp then for _, tool in ipairs(bp:GetChildren()) do
+    if tool:IsA("Tool") then table.insert(playerData.Backpack, tool.Name) end
+end end
 
--- 安全提取玩家信息
-SafeUtils:SafeCall(function()
-    local info = {
-        UserId = player.UserId,
-        Name = player.Name,
-        DisplayName = player.DisplayName,
-        Team = player.Team and player.Team.Name or "None",
-        Character = player.Character and player.Character.Name or "无角色"
-    }
-    Extractor.Data.PlayerInfo = info
-    print("📋 玩家信息已提取")
-end)
+-- PlayerGui 界面
+local pg = player:FindFirstChild("PlayerGui")
+if pg then for _, gui in ipairs(pg:GetChildren()) do
+    if gui:IsA("ScreenGui") then
+        table.insert(playerData.PlayerGui, {Name=gui.Name, Enabled=gui.Enabled})
+    end
+end end
 
--- 提取所有 RemoteEvent / RemoteFunction / BindableEvent
-SafeUtils:SafeCall(function()
-    local remotes = {}
-    for _, obj in ipairs(game:GetDescendants()) do
-        if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") or obj:IsA("BindableEvent") then
-            table.insert(remotes, {
-                Name = obj.Name,
-                Class = obj.ClassName,
-                Path = obj:GetFullName()
+-- PlayerScripts 源码提取
+local ps = player:FindFirstChild("PlayerScripts")
+if ps and CONFIG.ExtractSource then
+    for _, scriptObj in ipairs(ps:GetDescendants()) do
+        if scriptObj:IsA("LocalScript") or scriptObj:IsA("ModuleScript") then
+            local src = Safe:getScriptSource(scriptObj)
+            table.insert(playerData.PlayerScripts, {
+                Name = scriptObj.Name,
+                Class = scriptObj.ClassName,
+                Path = scriptObj:GetFullName(),
+                Source = src
             })
         end
     end
-    Extractor.Data.Remotes = remotes
-    print("📡 找到 " .. #remotes .. " 个远程事件")
-end)
+end
 
--- 提取常用属性（示例：仅提取 Workspace 第一层结构）
-SafeUtils:SafeCall(function()
-    local workspaceChildren = {}
-    for _, child in ipairs(workspace:GetChildren()) do
-        table.insert(workspaceChildren, child.Name .. " [" .. child.ClassName .. "]")
+Extractor.Data.Player = playerData
+
+-- 3. 远程事件（含源码中的参数猜测）
+local remotes = {}
+for _, obj in ipairs(game:GetDescendants()) do
+    if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") or obj:IsA("BindableEvent") then
+        remotes[#remotes+1] = {
+            Name = obj.Name,
+            Class = obj.ClassName,
+            Path = obj:GetFullName(),
+            Parent = obj.Parent and obj.Parent.Name
+        }
     end
-    Extractor.Data.GameStructure.WorkspaceChildren = workspaceChildren
-end)
+end
+Extractor.Data.Remotes = remotes
 
--- 输出结果
-print("=== 数据提取完成 ===")
-print("玩家: " .. Extractor.Data.PlayerInfo.Name)
-print("远程事件数量: " .. #Extractor.Data.Remotes)
+-- 4. 所有服务扫描（深度可调）
+local services = {}
+local allServices = {
+    "Workspace", "ReplicatedStorage", "ReplicatedFirst", "Players",
+    "Lighting", "SoundService", "StarterGui", "StarterPlayer",
+    "StarterPack", "StarterCharacter", "PhysicsService", "UserInputService",
+    "ContextActionService", "TweenService", "MarketplaceService",
+    "TeleportService", "RunService", "HttpService", "Chat", "LocalizationService"
+}
+for _, sName in ipairs(allServices) do
+    Safe:pcall(function()
+        local srv = game:GetService(sName)
+        if srv then
+            local function scan(obj, depth)
+                if depth > CONFIG.MaxDepth then return nil end
+                local node = {Name=obj.Name, Class=obj.ClassName, Children={}}
+                if obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript") then
+                    node.Source = Safe:getScriptSource(obj)
+                end
+                for _, child in ipairs(obj:GetChildren()) do
+                    local c = scan(child, depth+1)
+                    if c then table.insert(node.Children, c) end
+                end
+                return node
+            end
+            services[sName] = scan(srv, 0)
+        end
+    end)
+end
+Extractor.Data.Services = services
 
--- 将数据存入全局变量，供后续脚本使用
-getgenv().ExtractedData = Extractor.Data
-print("💾 数据已保存至全局变量 'ExtractedData'，可在其他脚本中直接调用。")
+-- 5. 物理设置（碰撞组、重力等）
+if CONFIG.ExtractPhysics then
+    local physData = {}
+    Safe:pcall(function()
+        local ps = game:GetService("PhysicsService")
+        physData.Gravity = workspace.Gravity
+        physData.CollisionGroups = {}
+        -- 尝试列出所有碰撞组（可能不存在此方法）
+        for i=0,31 do
+            local name = ps:GetCollisionGroupName(i)
+            if name ~= "" then
+                table.insert(physData.CollisionGroups, {Index=i, Name=name})
+            end
+        end
+    end)
+    Extractor.Data.Physics = physData
+end
+
+-- 6. 音效列表（用于事件检测）
+local sounds = {}
+for _, obj in ipairs(workspace:GetDescendants()) do
+    if obj:IsA("Sound") then
+        sounds[#sounds+1] = {Name=obj.Name, SoundId=obj.SoundId, IsPlaying=obj.IsPlaying}
+    end
+end
+Extractor.Data.Sounds = sounds
+
+-- 7. 照明设置（夜视相关）
+Extractor.Data.Lighting = {
+    Ambient = workspace.Ambient,
+    Brightness = game.Lighting.Brightness,
+    ClockTime = game.Lighting.ClockTime,
+    ExposureCompensation = game.Lighting.ExposureCompensation,
+    FogEnd = game.Lighting.FogEnd,
+    FogStart = game.Lighting.FogStart
+}
+
+-- 8. 可能的漏洞标记（简单启发式）
+local vulns = {}
+for _, remote in ipairs(remotes) do
+    if remote.Path:find("ReplicatedStorage") and not remote.Name:lower():match("ban") then
+        vulns[#vulns+1] = {Type="Unprotected Remote", Remote=remote.Name, Path=remote.Path}
+    end
+end
+Extractor.Data.PotentialVulnerabilities = vulns
+
+-- ==================== 完成并保存 ====================
+getgenv().TotalExtractedData = Extractor.Data
+print("✅ 全量数据提取完成！变量名: TotalExtractedData")
+
+if CONFIG.OutputJSON then
+    Safe:pcall(function()
+        local HttpService = game:GetService("HttpService")
+        local json = HttpService:JSONEncode(Safe:serialize(Extractor.Data))
+        local holder = Instance.new("StringValue")
+        holder.Name = "FullData_" .. os.time()
+        holder.Value = json
+        holder.Parent = player:WaitForChild("PlayerGui")
+        print("📁 JSON 数据已保存至 PlayerGui: " .. holder.Name)
+    end)
+end
