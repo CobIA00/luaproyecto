@@ -1,290 +1,498 @@
---[ TOTAL CLIENT EXTRACTOR ULTIMATE v3.0 ]--
--- 修复光照错误，新增 CoreGui / 内存模块 / 物理碰撞 / 导出文件
+--[GROK-SECURE] -- 深度信息提取器 - Delta执行器优化版
+-- 版本: 2.0.0 | 设计原则: 安全优先，兼容Delta执行器，反检测设计
 
-local CONFIG = {
-    MaxDepth = 5,
-    ExtractSource = true,            -- 提取脚本源码
-    ExtractCoreGui = true,           -- 提取 CoreGui 内容（可能含反作弊UI）
-    ExtractLoadedModules = true,     -- 提取所有已加载模块源码（需 getloadedmodules）
-    ExtractGCTable = true,           -- 提取全局表信息（需 getgc）
-    ExtractPhysicsDetails = true,    -- 提取 Workspace 内所有部件的碰撞属性
-    WriteToFile = true,              -- 保存为文件（需 writefile 支持）
-    OutputJSON = true
-}
-
--- ==================== 安全工具 ====================
-local Safe = {}
-function Safe:pcall(...)
-    local s, r = pcall(...)
-    return s, r
-end
-function Safe:serialize(v, depth)
-    depth = depth or 0
-    if depth > 5 then return "[MaxDepth]" end
-    local t = type(v)
-    if t == "string" or t == "number" or t == "boolean" then
-        return v
-    elseif t == "table" then
-        local out = {}
-        for k, val in pairs(v) do
-            out[tostring(k)] = Safe:serialize(val, depth + 1)
-        end
-        return out
-    elseif t == "userdata" or t == "function" then
-        return tostring(v)
-    else
-        return nil
-    end
-end
-
--- 获取源码（适配 Delta）
-function Safe:getScriptSource(scriptObj)
-    if not CONFIG.ExtractSource then return nil end
-    local src = nil
-    Safe:pcall(function()
-        if getsource then src = getsource(scriptObj)
-        elseif getscriptclosure then
-            local f = getscriptclosure(scriptObj)
-            if debug and debug.getinfo then
-                src = debug.getinfo(f, "S").source
-            end
-        elseif scriptObj.Source then src = scriptObj.Source
-        end
-    end)
-    return src
-end
-
--- ==================== 主提取器 ====================
 local player = game.Players.LocalPlayer
-repeat task.wait() until player and player.Character
-
-local Extractor = { Data = {} }
-
--- 1. 元信息
-Extractor.Data.Meta = {
-    GameId = game.GameId,
-    PlaceId = game.PlaceId,
-    JobId = game.JobId,
-    Timestamp = os.time(),
-    PlayerCount = #game.Players:GetPlayers(),
-    Executor = identifyexecutor and identifyexecutor() or "Delta"
+local extractData = {
+    Meta = {
+        Timestamp = os.time(),
+        Version = "2.0.0",
+        Executor = "Delta"
+    }
 }
 
--- 2. 玩家详细数据（强化）
-local playerData = {
-    UserId = player.UserId,
-    Name = player.Name,
-    DisplayName = player.DisplayName,
-    Team = player.Team and player.Team.Name,
-    Character = player.Character and player.Character.Name,
-    Backpack = {},
-    PlayerGui = {},
-    PlayerScripts = {},
-    Values = {}
-}
-
-for _, v in ipairs(player:GetChildren()) do
-    if v:IsA("ValueBase") then
-        playerData.Values[v.Name] = Safe:serialize(v.Value)
-    end
+-- ==================== 第一部分：安全工具函数 ====================
+-- 安全函数：检测Delta执行器特殊功能可用性
+local function checkDeltaCapabilities()
+    local caps = {
+        getgc = false,
+        getconnections = false,
+        getloadedmodules = false,
+        getgenv = false,
+        getsenv = false,
+        hookfunction = false,
+        getrawmetatable = false
+    }
+    
+    -- 安全检测每个功能
+    pcall(function() if getgc then caps.getgc = true end end)
+    pcall(function() if getconnections then caps.getconnections = true end end)
+    pcall(function() if getloadedmodules then caps.getloadedmodules = true end end)
+    pcall(function() if getgenv then caps.getgenv = true end end)
+    pcall(function() if getsenv then caps.getsenv = true end end)
+    pcall(function() if hookfunction then caps.hookfunction = true end end)
+    pcall(function() if getrawmetatable then caps.getrawmetatable = true end end)
+    
+    extractData.Meta.Capabilities = caps
+    return caps
 end
 
-local bp = player:FindFirstChild("Backpack")
-if bp then for _, tool in ipairs(bp:GetChildren()) do
-    if tool:IsA("Tool") then table.insert(playerData.Backpack, tool.Name) end
-end end
+-- 安全函数：随机延迟（模拟人类行为）
+local function humanDelay(minDelay, maxDelay)
+    minDelay = minDelay or 0.05
+    maxDelay = maxDelay or 0.2
+    wait(math.random(minDelay * 100, maxDelay * 100) / 100)
+end
 
-local pg = player:FindFirstChild("PlayerGui")
-if pg then for _, gui in ipairs(pg:GetChildren()) do
-    if gui:IsA("ScreenGui") then
-        table.insert(playerData.PlayerGui, {Name=gui.Name, Enabled=gui.Enabled})
-    end
-end end
-
--- PlayerScripts 源码提取
-local ps = player:FindFirstChild("PlayerScripts")
-if ps and CONFIG.ExtractSource then
-    for _, scriptObj in ipairs(ps:GetDescendants()) do
-        if scriptObj:IsA("LocalScript") or scriptObj:IsA("ModuleScript") then
-            table.insert(playerData.PlayerScripts, {
-                Name = scriptObj.Name,
-                Class = scriptObj.ClassName,
-                Path = scriptObj:GetFullName(),
-                Source = Safe:getScriptSource(scriptObj)
-            })
+-- 安全函数：深度扫描（优化版 - 限制范围并过滤不必要对象）
+local function smartDeepScan(root, options)
+    options = options or {}
+    local maxDepth = options.maxDepth or 3
+    local maxChildren = options.maxChildren or 50
+    local includeClasses = options.includeClasses or {}
+    local excludeClasses = options.excludeClasses or {
+        "ParticleEmitter", "Trail", "Beam", "Sound", "Decal", "Texture",
+        "UIStroke", "UIGradient", "UIPadding", "UIScale"
+    }
+    
+    local result = {}
+    local function scan(parent, depth)
+        if depth > maxDepth then return end
+        
+        local children = parent:GetChildren()
+        local count = 0
+        
+        for _, child in ipairs(children) do
+            if count >= maxChildren then break end
+            
+            -- 过滤不重要的类
+            if not table.find(excludeClasses, child.ClassName) then
+                count = count + 1
+                
+                local node = {
+                    Name = child.Name,
+                    Class = child.ClassName,
+                    Depth = depth
+                }
+                
+                -- 根据类类型提取特定属性
+                if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
+                    node.Type = "Remote"
+                    node.Path = child:GetFullName()
+                elseif child:IsA("BindableEvent") or child:IsA("BindableFunction") then
+                    node.Type = "Bindable"
+                    node.Path = child:GetFullName()
+                elseif child:IsA("ModuleScript") then
+                    node.Type = "Module"
+                elseif child:IsA("LocalScript") or child:IsA("Script") then
+                    node.Type = "Script"
+                    -- 尝试获取脚本源码（如果环境允许）
+                    pcall(function()
+                        if getsenv and child:IsA("LocalScript") then
+                            local env = getsenv(child)
+                            if env then
+                                node.HasEnvironment = true
+                            end
+                        end
+                    end)
+                elseif child:IsA("Model") or child:IsA("Folder") then
+                    node.Type = "Container"
+                    node.Children = {}
+                    scan(child, depth + 1)
+                elseif child:IsA("BasePart") then
+                    node.Type = "Part"
+                    node.Position = tostring(child.Position)
+                    node.Size = tostring(child.Size)
+                    node.Transparency = child.Transparency
+                    node.CanCollide = child.CanCollide
+                    node.Anchored = child.Anchored
+                elseif child:IsA("ValueBase") then
+                    node.Type = "Value"
+                    pcall(function() node.Value = child.Value end)
+                end
+                
+                table.insert(result, node)
+            end
         end
     end
+    
+    scan(root, 0)
+    return result
 end
 
-Extractor.Data.Player = playerData
-
--- 3. 远程事件
-local remotes = {}
-for _, obj in ipairs(game:GetDescendants()) do
-    if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") or obj:IsA("BindableEvent") then
-        remotes[#remotes+1] = {
-            Name = obj.Name,
-            Class = obj.ClassName,
-            Path = obj:GetFullName(),
-            Parent = obj.Parent and obj.Parent.Name
+-- ==================== 第二部分：核心提取功能 ====================
+-- 1. 提取玩家信息
+extractData.PlayerInfo = {}
+pcall(function()
+    humanDelay(0.1, 0.2)
+    extractData.PlayerInfo = {
+        UserId = player.UserId,
+        Name = player.Name,
+        DisplayName = player.DisplayName,
+        AccountAge = player.AccountAge,
+        MembershipType = tostring(player.MembershipType),
+        Team = player.Team and player.Team.Name or nil,
+        Character = player.Character and player.Character.Name or nil
+    }
+    
+    -- 如果角色存在，提取角色信息
+    if player.Character then
+        extractData.PlayerInfo.CharacterInfo = {
+            Health = player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health,
+            MaxHealth = player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.MaxHealth,
+            Position = tostring(player.Character:GetPivot()),
+            RootPart = player.Character:FindFirstChild("HumanoidRootPart") and player.Character.HumanoidRootPart.Name
         }
     end
-end
-Extractor.Data.Remotes = remotes
+end)
 
--- 4. 光照设置（修正：全部从 Lighting 获取）
-Extractor.Data.Lighting = {}
-Safe:pcall(function()
-    local L = game:GetService("Lighting")
-    Extractor.Data.Lighting = {
-        Ambient = L.Ambient,
-        Brightness = L.Brightness,
-        ClockTime = L.ClockTime,
-        ExposureCompensation = L.ExposureCompensation,
-        FogEnd = L.FogEnd,
-        FogStart = L.FogStart,
-        OutdoorAmbient = L.OutdoorAmbient,
-        TimeOfDay = L.TimeOfDay,
-        GeographicLatitude = L.GeographicLatitude
+-- 2. 提取玩家统计数据（智能版）
+extractData.Stats = {}
+pcall(function()
+    humanDelay(0.1, 0.3)
+    
+    -- 方法1：从玩家对象本身查找
+    for _, child in ipairs(player:GetChildren()) do
+        if child:IsA("ValueBase") then
+            pcall(function()
+                extractData.Stats[child.Name] = {
+                    Value = child.Value,
+                    Class = child.ClassName,
+                    Source = "Direct"
+                }
+            end)
+        end
+    end
+    
+    -- 方法2：从PlayerGui查找（常见位置）
+    if player.PlayerGui then
+        for _, gui in ipairs(player.PlayerGui:GetChildren()) do
+            pcall(function()
+                for _, child in ipairs(gui:GetDescendants()) do
+                    if child:IsA("ValueBase") and not extractData.Stats[child.Name] then
+                        extractData.Stats[child.Name] = {
+                            Value = child.Value,
+                            Class = child.ClassName,
+                            Source = "PlayerGui"
+                        }
+                    end
+                end
+            end)
+        end
+    end
+end)
+
+-- 3. 使用Delta执行器特殊功能提取游戏状态
+local caps = checkDeltaCapabilities()
+
+-- 3.1 通过GC扫描获取隐藏数据（如果可用）
+if caps.getgc then
+    extractData.GCData = {}
+    pcall(function()
+        humanDelay(0.2, 0.4)
+        local gcObjects = getgc(true)
+        local count = 0
+        local maxObjects = 500  -- 限制数量防止崩溃
+        
+        for i, obj in ipairs(gcObjects) do
+            if count >= maxObjects then break end
+            pcall(function()
+                local objType = typeof(obj)
+                if objType == "table" then
+                    -- 尝试提取表的关键信息
+                    local keys = {}
+                    for k, v in pairs(obj) do
+                        if type(k) == "string" and #keys < 20 then
+                            table.insert(keys, k)
+                        end
+                    end
+                    if #keys > 0 then
+                        count = count + 1
+                        table.insert(extractData.GCData, {
+                            Type = "Table",
+                            Keys = keys,
+                            Size = #keys
+                        })
+                    end
+                elseif objType == "function" then
+                    -- 记录函数信息
+                    local info = debug.getinfo(obj, "nS")
+                    if info and info.name then
+                        count = count + 1
+                        table.insert(extractData.GCData, {
+                            Type = "Function",
+                            Name = info.name,
+                            Source = info.source
+                        })
+                    end
+                elseif objType == "userdata" then
+                    -- 用户数据（通常包含重要对象）
+                    pcall(function()
+                        if obj.ClassName then
+                            count = count + 1
+                            table.insert(extractData.GCData, {
+                                Type = "Userdata",
+                                Class = obj.ClassName,
+                                Name = obj.Name or "Unknown"
+                            })
+                        end
+                    end)
+                end
+            end)
+        end
+        extractData.Meta.GCObjectsScanned = count
+    end)
+end
+
+-- 3.2 获取信号连接信息（如果可用）
+if caps.getconnections then
+    extractData.SignalConnections = {}
+    pcall(function()
+        humanDelay(0.15, 0.25)
+        -- 查找关键信号的连接
+        local signalsToCheck = {
+            game:GetService("RunService").Heartbeat,
+            game:GetService("RunService").RenderStepped,
+            game:GetService("RunService").Stepped
+        }
+        
+        for _, signal in ipairs(signalsToCheck) do
+            local connections = getconnections(signal)
+            local connInfo = {
+                Signal = tostring(signal),
+                ConnectionCount = #connections,
+                Functions = {}
+            }
+            
+            for i, conn in ipairs(connections) do
+                if i <= 5 then  -- 限制记录数量
+                    pcall(function()
+                        local func = conn.Function
+                        if func then
+                            local info = debug.getinfo(func, "nS")
+                            table.insert(connInfo.Functions, {
+                                Name = info.name or "Anonymous",
+                                Source = info.source or "Unknown"
+                            })
+                        end
+                    end)
+                end
+            end
+            
+            table.insert(extractData.SignalConnections, connInfo)
+        end
+    end)
+end
+
+-- 3.3 获取已加载模块（如果可用）
+if caps.getloadedmodules then
+    extractData.LoadedModules = {}
+    pcall(function()
+        humanDelay(0.1, 0.2)
+        local modules = getloadedmodules()
+        for i, module in ipairs(modules) do
+            if i <= 100 then  -- 限制数量
+                pcall(function()
+                    table.insert(extractData.LoadedModules, {
+                        Name = module.Name or "Unknown",
+                        Class = module.ClassName or "Unknown"
+                    })
+                end)
+            end
+        end
+        extractData.Meta.ModulesLoaded = #extractData.LoadedModules
+    end)
+end
+
+-- 4. 提取远程事件信息（用于后续自动化）
+extractData.Remotes = {
+    Events = {},
+    Functions = {},
+    Bindables = {}
+}
+
+pcall(function()
+    humanDelay(0.2, 0.3)
+    
+    -- 使用智能扫描而非全量遍历
+    local remotes = smartDeepScan(game.ReplicatedStorage, {
+        maxDepth = 4,
+        maxChildren = 100,
+        includeClasses = {"RemoteEvent", "RemoteFunction", "BindableEvent", "BindableFunction"}
+    })
+    
+    for _, remote in ipairs(remotes) do
+        if remote.Type == "Remote" then
+            if remote.Class == "RemoteEvent" then
+                table.insert(extractData.Remotes.Events, remote)
+            elseif remote.Class == "RemoteFunction" then
+                table.insert(extractData.Remotes.Functions, remote)
+            end
+        elseif remote.Type == "Bindable" then
+            table.insert(extractData.Remotes.Bindables, remote)
+        end
+    end
+    
+    extractData.Meta.RemoteCount = {
+        Events = #extractData.Remotes.Events,
+        Functions = #extractData.Remotes.Functions,
+        Bindables = #extractData.Remotes.Bindables
     }
 end)
 
--- 5. 服务结构扫描（增强）
-local services = {}
-local allServices = {
-    "Workspace", "ReplicatedStorage", "ReplicatedFirst", "Players",
-    "Lighting", "SoundService", "StarterGui", "StarterPlayer",
-    "StarterPack", "StarterCharacter", "PhysicsService", "UserInputService",
-    "ContextActionService", "TweenService", "MarketplaceService",
-    "TeleportService", "RunService", "HttpService", "Chat", "LocalizationService"
+-- 5. 提取游戏环境信息
+extractData.GameInfo = {}
+pcall(function()
+    humanDelay(0.1, 0.2)
+    
+    extractData.GameInfo = {
+        PlaceId = game.PlaceId,
+        PlaceVersion = game.PlaceVersion,
+        JobId = game.JobId,
+        GameName = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name or "Unknown",
+        CreatorId = game.CreatorId,
+        CreatorType = tostring(game.CreatorType),
+        ServerType = tostring(game:GetService("RunService"):IsStudio() and "Studio" or "Live"),
+        CurrentPlayers = #game.Players:GetPlayers(),
+        MaxPlayers = game.Players.MaxPlayers
+    }
+end)
+
+-- ==================== 第三部分：数据存储与输出 ====================
+-- 智能表转字符串（美化版）
+local function beautifyTable(t, indent, maxDepth, currentDepth)
+    indent = indent or ""
+    maxDepth = maxDepth or 5
+    currentDepth = currentDepth or 0
+    
+    if currentDepth > maxDepth then
+        return '"..."'
+    end
+    
+    if type(t) ~= "table" then
+        if type(t) == "string" then
+            return string.format("%q", t)
+        else
+            return tostring(t)
+        end
+    end
+    
+    local result = {}
+    table.insert(result, "{")
+    
+    for k, v in pairs(t) do
+        local formattedKey = type(k) == "string" and string.format("[%q]", k) or "[" .. tostring(k) .. "]"
+        local formattedValue = beautifyTable(v, indent .. "  ", maxDepth, currentDepth + 1)
+        table.insert(result, indent .. "  " .. formattedKey .. " = " .. formattedValue .. ",")
+    end
+    
+    table.insert(result, indent .. "}")
+    return table.concat(result, "\n")
+end
+
+-- 创建数据存储（隐藏位置）
+local function createDataStorage(data)
+    local success, result = pcall(function()
+        -- 使用更隐蔽的存储位置
+        local storage = Instance.new("Folder")
+        storage.Name = "HS_" .. tostring(math.random(10000, 99999))
+        storage.Parent = game:GetService("CoreGui")  -- CoreGui更难被检测
+        
+        local stringValue = Instance.new("StringValue")
+        stringValue.Name = "data"
+        stringValue.Value = data
+        stringValue.Parent = storage
+        
+        return storage
+    end)
+    
+    return success and result or nil
+end
+
+-- 主输出
+local jsonData = beautifyTable(extractData)
+print("=== 深度信息提取完成 ===")
+print("时间戳:", extractData.Meta.Timestamp)
+print("执行器能力:", extractData.Meta.Capabilities)
+print("远程事件数:", extractData.Meta.RemoteCount.Events)
+print("远程函数数:", extractData.Meta.RemoteCount.Functions)
+print("GC扫描对象数:", extractData.Meta.GCObjectsScanned or "N/A")
+print("=========================")
+
+-- 保存数据
+local storage = createDataStorage(jsonData)
+if storage then
+    print("数据已保存至:", storage:GetFullName())
+else
+    print("警告: 数据保存失败")
+end
+
+-- ==================== 第四部分：智能自动化基础框架 ====================
+extractData.AutomationFramework = {
+    -- 安全调用远程事件
+    FireRemote = function(remotePath, ...)
+        local success, result = pcall(function()
+            local remote = game:GetService("ReplicatedStorage"):FindFirstChild(remotePath, true)
+            if not remote then
+                remote = game:GetService("Workspace"):FindFirstChild(remotePath, true)
+            end
+            
+            if remote and remote:IsA("RemoteEvent") then
+                humanDelay(0.3, 0.8)
+                remote:FireServer(...)
+                return true
+            end
+            return false
+        end)
+        return success and result
+    end,
+    
+    -- 安全调用远程函数
+    InvokeRemote = function(remotePath, ...)
+        local success, result = pcall(function()
+            local remote = game:GetService("ReplicatedStorage"):FindFirstChild(remotePath, true)
+            if not remote then
+                remote = game:GetService("Workspace"):FindFirstChild(remotePath, true)
+            end
+            
+            if remote and remote:IsA("RemoteFunction") then
+                humanDelay(0.3, 0.8)
+                return remote:InvokeServer(...)
+            end
+            return nil
+        end)
+        return success and result
+    end,
+    
+    -- 自动识别可能的自动化目标
+    SuggestAutomation = function()
+        local suggestions = {}
+        
+        -- 根据远程事件名称推荐自动化
+        for _, remote in ipairs(extractData.Remotes.Events) do
+            local name = remote.Name:lower()
+            if name:find("collect") or name:find("pickup") then
+                table.insert(suggestions, {Type = "Collect", Remote = remote.Name})
+            elseif name:find("attack") or name:find("damage") then
+                table.insert(suggestions, {Type = "Combat", Remote = remote.Name})
+            elseif name:find("buy") or name:find("purchase") then
+                table.insert(suggestions, {Type = "Shop", Remote = remote.Name})
+            elseif name:find("equip") or name:find("unequip") then
+                table.insert(suggestions, {Type = "Inventory", Remote = remote.Name})
+            end
+        end
+        
+        return suggestions
+    end
 }
 
-local function deepScan(obj, depth)
-    if depth > CONFIG.MaxDepth then return nil end
-    local node = {Name=obj.Name, Class=obj.ClassName, Children={}}
-    if obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript") then
-        node.Source = Safe:getScriptSource(obj)
+-- 输出自动化建议
+local suggestions = extractData.AutomationFramework.SuggestAutomation()
+if #suggestions > 0 then
+    print("\n=== 自动化建议 ===")
+    for _, sugg in ipairs(suggestions) do
+        print("- " .. sugg.Type .. ": " .. sugg.Remote)
     end
-    -- 物理属性（仅对 BasePart）
-    if CONFIG.ExtractPhysicsDetails and obj:IsA("BasePart") then
-        node.Physics = {
-            CanCollide = obj.CanCollide,
-            Massless = obj.Massless,
-            CollisionGroupId = obj.CollisionGroupId,
-            Transparency = obj.Transparency,
-            Anchored = obj.Anchored
-        }
-    end
-    for _, child in ipairs(obj:GetChildren()) do
-        local c = deepScan(child, depth+1)
-        if c then table.insert(node.Children, c) end
-    end
-    return node
+    print("==================")
 end
 
-for _, sName in ipairs(allServices) do
-    Safe:pcall(function()
-        local srv = game:GetService(sName)
-        if srv then
-            services[sName] = deepScan(srv, 0)
-        end
-    end)
-end
-Extractor.Data.Services = services
-
--- 6. CoreGui 提取（需保护）
-if CONFIG.ExtractCoreGui then
-    Safe:pcall(function()
-        local coreGui = game:GetService("CoreGui")
-        Extractor.Data.CoreGui = deepScan(coreGui, 0)
-    end)
-end
-
--- 7. 已加载模块（需 getloadedmodules）
-if CONFIG.ExtractLoadedModules then
-    Extractor.Data.LoadedModules = {}
-    Safe:pcall(function()
-        if getloadedmodules then
-            local modules = getloadedmodules()
-            for _, mod in ipairs(modules) do
-                table.insert(Extractor.Data.LoadedModules, {
-                    Name = mod.Name,
-                    Source = Safe:getScriptSource(mod)
-                })
-            end
-        end
-    end)
-end
-
--- 8. 全局表（需 getgc）
-if CONFIG.ExtractGCTable then
-    Extractor.Data.GlobalTables = {}
-    Safe:pcall(function()
-        if getgc then
-            local gc = getgc()
-            for _, obj in ipairs(gc) do
-                if type(obj) == "table" then
-                    local summary = {}
-                    for k, v in pairs(obj) do
-                        if type(v) ~= "function" then
-                            summary[tostring(k)] = Safe:serialize(v, 2)
-                        else
-                            summary[tostring(k)] = "[Function]"
-                        end
-                        if #summary > 10 then break end
-                    end
-                    table.insert(Extractor.Data.GlobalTables, summary)
-                end
-            end
-        end
-    end)
-end
-
--- 9. 音效列表
-local sounds = {}
-for _, obj in ipairs(workspace:GetDescendants()) do
-    if obj:IsA("Sound") then
-        sounds[#sounds+1] = {Name=obj.Name, SoundId=obj.SoundId, IsPlaying=obj.IsPlaying}
-    end
-end
-Extractor.Data.Sounds = sounds
-
--- 10. 漏洞启发
-local vulns = {}
-for _, remote in ipairs(remotes) do
-    if remote.Path:find("ReplicatedStorage") and not remote.Name:lower():match("ban") then
-        vulns[#vulns+1] = {Type="Unprotected Remote", Remote=remote.Name, Path=remote.Path}
-    end
-end
-Extractor.Data.PotentialVulnerabilities = vulns
-
--- ==================== 输出与保存 ====================
-getgenv().TotalExtractedData = Extractor.Data
-print("✅ 深度提取完成！变量: TotalExtractedData")
-
--- JSON 保存到 PlayerGui
-if CONFIG.OutputJSON then
-    Safe:pcall(function()
-        local HttpService = game:GetService("HttpService")
-        local json = HttpService:JSONEncode(Safe:serialize(Extractor.Data))
-        local holder = Instance.new("StringValue")
-        holder.Name = "DeepData_" .. os.time()
-        holder.Value = json
-        holder.Parent = player:WaitForChild("PlayerGui")
-        print("📁 JSON 已保存至 PlayerGui: " .. holder.Name)
-    end)
-end
-
--- 写入文件（需 writefile 支持）
-if CONFIG.WriteToFile then
-    Safe:pcall(function()
-        if writefile then
-            local json = game:GetService("HttpService"):JSONEncode(Safe:serialize(Extractor.Data))
-            local filename = "DeltaExtract_" .. game.PlaceId .. "_" .. os.time() .. ".json"
-            writefile(filename, json)
-            print("📄 数据已写入文件: " .. filename)
-        end
-    end)
-end
-
-print("🎯 脚本执行完毕。所有数据已就绪。")
+return extractData
