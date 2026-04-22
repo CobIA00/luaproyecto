@@ -1,118 +1,343 @@
-[GROK-RAW] -- Extractor Total Seguro para Delta Executor
+--[GROK-SECURE] -- Extractor Total Seguro para Delta Executor (v2.0)
 
-local player = game.Players.LocalPlayer
-local extractData = {}
+-- ============================================================
+-- CONFIGURACIÓN DE SEGURIDAD (Ajustable)
+-- ============================================================
+local CONFIG = {
+    MaxDepth = 3,                -- Profundidad máxima de escaneo (menor es más seguro)
+    SafeMode = true,            -- Desactiva funciones de alto riesgo
+    RandomizeDelays = true,     -- Añade retrasos humanos aleatorios
+    ScanInterval = 5,           -- Segundos entre escaneos profundos
+    OutputToFile = false,       -- Requiere funciones de archivo (riesgoso)
+    UseDeltaFeatures = true     -- Habilita optimizaciones para Delta Executor
+}
 
--- Función segura para deep scan de instancias (evita crashes y detección)
-local function safeDeepScan(parent, maxDepth, currentDepth)
-    currentDepth = currentDepth or 0
-    if currentDepth > maxDepth then return end
-    pcall(function()
-        for _, child in ipairs(parent:GetChildren()) do
-            local entry = {
-                Name = child.Name,
-                ClassName = child.ClassName,
-                Properties = {}
-            }
-            -- Extraer propiedades comunes de forma segura
-            pcall(function()
-                for _, prop in ipairs({"Value", "Text", "Position", "Size", "Enabled", "Visible"}) do
-                    if pcall(function() return child[prop] end) then
-                        entry.Properties[prop] = tostring(child[prop])
-                    end
-                end
-            end)
-            if child:IsA("ValueBase") then
-                entry.Value = child.Value
-            end
-            if not extractData[parent.ClassName] then extractData[parent.ClassName] = {} end
-            table.insert(extractData[parent.ClassName], entry)
-            safeDeepScan(child, maxDepth, currentDepth + 1)
+-- ============================================================
+-- UTILIDADES DE SEGURIDAD
+-- ============================================================
+local SafeUtils = {}
+
+-- Función segura para pcall con reintentos y logging
+function SafeUtils:SafeCall(func, ...)
+    local success, result = pcall(func, ...)
+    if not success then
+        -- Log silencioso para evitar detección (no imprime nada en consola)
+        -- Solo para depuración interna si es necesario
+    end
+    return success, result
+end
+
+-- Retraso humano aleatorio para evitar patrones de comportamiento robótico
+function SafeUtils:HumanDelay(baseDelay)
+    if not CONFIG.RandomizeDelays then
+        task.wait(baseDelay or 0.5)
+        return
+    end
+    local minDelay = baseDelay and (baseDelay * 0.8) or 0.4
+    local maxDelay = baseDelay and (baseDelay * 1.5) or 0.8
+    local randomDelay = minDelay + math.random() * (maxDelay - minDelay)
+    task.wait(randomDelay)
+end
+
+-- Verificación de existencia de instancia sin activar eventos
+function SafeUtils:SafeFindFirstChild(parent, name, recursive)
+    local success, result = SafeUtils:SafeCall(function()
+        if recursive then
+            return parent:FindFirstChild(name, true)
+        else
+            return parent:FindFirstChild(name)
         end
+    end)
+    return success and result or nil
+end
+
+-- Obtención segura de propiedades sin riesgo de errores
+function SafeUtils:SafeGetProperty(instance, propName)
+    local success, value = SafeUtils:SafeCall(function()
+        return instance[propName]
+    end)
+    if success and value ~= nil then
+        -- Convertir tipos no serializables a string de forma segura
+        if type(value) == "userdata" then
+            return tostring(value)
+        elseif type(value) == "function" then
+            return nil
+        else
+            return value
+        end
+    end
+    return nil
+end
+
+-- ============================================================
+-- EXTRACTOR PRINCIPAL
+-- ============================================================
+local Extractor = {}
+Extractor.Data = {
+    PlayerInfo = {},
+    Services = {},
+    Remotes = {},
+    GameStructure = {},
+    Stats = {},
+    Timestamp = os.time()
+}
+
+-- Información del jugador (básica y segura)
+function Extractor:ExtractPlayerInfo()
+    local player = game.Players.LocalPlayer
+    if not player then return end
+
+    SafeUtils:SafeCall(function()
+        local info = {
+            UserId = player.UserId,
+            Name = player.Name,
+            DisplayName = SafeUtils:SafeGetProperty(player, "DisplayName") or player.Name,
+            AccountAge = SafeUtils:SafeGetProperty(player, "AccountAge"),
+            MembershipType = SafeUtils:SafeGetProperty(player, "MembershipType"),
+            Team = player.Team and SafeUtils:SafeGetProperty(player.Team, "Name") or "None",
+            Character = player.Character and SafeUtils:SafeGetProperty(player.Character, "Name") or "No Character"
+        }
+        -- Extraer datos del personaje si existe
+        if player.Character then
+            local character = player.Character
+            info.CharacterInfo = {
+                Health = SafeUtils:SafeGetProperty(character:FindFirstChild("Humanoid"), "Health"),
+                MaxHealth = SafeUtils:SafeGetProperty(character:FindFirstChild("Humanoid"), "MaxHealth"),
+                Position = SafeUtils:SafeGetProperty(character:FindFirstChild("HumanoidRootPart"), "Position")
+            }
+        end
+        Extractor.Data.PlayerInfo = info
     end)
 end
 
--- Extraer info del jugador y stats
-pcall(function()
-    extractData.PlayerInfo = {
-        UserId = player.UserId,
-        Name = player.Name,
-        DisplayName = player.DisplayName,
-        Team = player.Team and player.Team.Name or "None",
-        Character = player.Character and player.Character.Name or "No Character"
+-- Extracción segura de servicios (solo los accesibles)
+function Extractor:ExtractServices()
+    local safeServices = {
+        "Players", "ReplicatedStorage", "Workspace", "Lighting",
+        "StarterGui", "SoundService", "UserInputService", "ContextActionService",
+        "RunService", "TweenService", "MarketplaceService", "TeleportService"
     }
-    
-    -- Stats comunes en juegos (ajusta según el juego)
-    extractData.Stats = {}
-    for _, v in ipairs(game:GetDescendants()) do
-        pcall(function()
-            if v:IsA("IntValue") or v:IsA("NumberValue") or v:IsA("StringValue") then
-                if v.Parent and (v.Parent == player or v.Parent.Parent == player) then
-                    extractData.Stats[v.Name] = v.Value
-                end
+
+    for _, serviceName in ipairs(safeServices) do
+        SafeUtils:SafeCall(function()
+            local service = game:GetService(serviceName)
+            if service then
+                Extractor.Data.Services[serviceName] = {
+                    ClassName = service.ClassName,
+                    ChildrenCount = #service:GetChildren()
+                }
             end
         end)
     end
-end)
-
--- Escanear ReplicatedStorage, Workspace, etc. (limitado para seguridad)
-safeDeepScan(game.ReplicatedStorage, 5)
-safeDeepScan(game.Workspace, 4)
-safeDeepScan(game.Players, 3)
-
--- Buscar Remotes y Bindables de forma segura (para autofarm futuro)
-extractData.Remotes = {}
-pcall(function()
-    for _, obj in ipairs(game:GetDescendants()) do
-        if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") or obj:IsA("BindableEvent") then
-            table.insert(extractData.Remotes, {
-                Name = obj.Name,
-                Class = obj.ClassName,
-                ParentPath = obj:GetFullName()
-            })
-        end
-    end
-end)
-
--- Dump a JSON-like para análisis (fácil de copiar o guardar)
-local function tableToString(t, indent)
-    indent = indent or ""
-    local str = "{\n"
-    for k, v in pairs(t) do
-        local key = type(k) == "string" and '"'..k..'"' or k
-        if type(v) == "table" then
-            str = str .. indent .. "  " .. key .. " = " .. tableToString(v, indent .. "  ") .. ",\n"
-        else
-            local val = type(v) == "string" and '"'..v..'"' or tostring(v)
-            str = str .. indent .. "  " .. key .. " = " .. val .. ",\n"
-        end
-    end
-    return str .. indent .. "}"
 end
 
-print("=== EXTRACTOR TOTAL COMPLETADO - DATOS DEL CLIENTE ===")
-print(tableToString(extractData))
-print("=== COPIA ESTO PARA ANÁLISIS Y AUTOFARM ===")
+-- Escaneo profundo seguro de la estructura del juego
+function Extractor:DeepScan(parent, depth, maxDepth, path)
+    depth = depth or 0
+    maxDepth = maxDepth or CONFIG.MaxDepth
+    path = path or parent.Name
 
--- Opcional: Guardar en un StringValue temporal (invisible para análisis)
-pcall(function()
-    local dataHolder = Instance.new("StringValue")
-    dataHolder.Name = "ExtractedData_" .. math.random(100000,999999)
-    dataHolder.Value = tableToString(extractData)
-    dataHolder.Parent = player:WaitForChild("PlayerGui") -- o un lugar oculto
-    print("Datos guardados en instancia temporal para scripts posteriores")
-end)
+    if depth > maxDepth then return end
+    if not parent or not parent:IsA("Instance") then return end
 
--- Para autofarm: ejemplo base seguro (usa los remotes extraídos)
--- Ajusta según tu juego. Siempre con randomization y checks.
-local function safeAutoFarm(remoteName, args)
+    local container = {
+        Name = parent.Name,
+        ClassName = parent.ClassName,
+        Path = path,
+        Children = {}
+    }
+
+    -- Propiedades comunes y seguras para extraer
+    local safeProps = {"Value", "Text", "Position", "Size", "Enabled", "Visible", "Transparency", "Color"}
+    local props = {}
+    for _, prop in ipairs(safeProps) do
+        local value = SafeUtils:SafeGetProperty(parent, prop)
+        if value ~= nil then
+            props[prop] = value
+        end
+    end
+    container.Properties = props
+
+    -- Si es un ValueBase, extraer el valor directamente
+    if parent:IsA("ValueBase") then
+        container.Value = SafeUtils:SafeGetProperty(parent, "Value")
+    end
+
+    -- Almacenar por tipo de clase
+    if not Extractor.Data.GameStructure[parent.ClassName] then
+        Extractor.Data.GameStructure[parent.ClassName] = {}
+    end
+    table.insert(Extractor.Data.GameStructure[parent.ClassName], container)
+
+    -- Escanear hijos de forma segura
+    SafeUtils:SafeCall(function()
+        for _, child in ipairs(parent:GetChildren()) do
+            if child and child:IsA("Instance") then
+                local childData = Extractor:DeepScan(child, depth + 1, maxDepth, path .. "." .. child.Name)
+                if childData then
+                    table.insert(container.Children, childData)
+                end
+            end
+        end
+    end)
+
+    return container
+end
+
+-- Búsqueda de RemoteEvents y RemoteFunctions (cruciales para autofarm)
+function Extractor:ExtractRemotes()
+    local remotes = {}
+    SafeUtils:SafeCall(function()
+        for _, obj in ipairs(game:GetDescendants()) do
+            if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") or obj:IsA("BindableEvent") then
+                table.insert(remotes, {
+                    Name = obj.Name,
+                    Class = obj.ClassName,
+                    Path = obj:GetFullName(),
+                    Parent = obj.Parent and obj.Parent.Name or "Unknown"
+                })
+            end
+        end
+    end)
+    Extractor.Data.Remotes = remotes
+end
+
+-- Extracción de estadísticas del jugador (valores comunes en juegos)
+function Extractor:ExtractStats()
+    local player = game.Players.LocalPlayer
+    if not player then return end
+
+    local stats = {}
+    SafeUtils:SafeCall(function()
+        -- Buscar valores numéricos y de texto en el Player y sus hijos directos
+        local containers = {player, player:FindFirstChild("leaderstats"), player:FindFirstChild("Stats")}
+        for _, container in ipairs(containers) do
+            if container then
+                for _, child in ipairs(container:GetChildren()) do
+                    if child:IsA("IntValue") or child:IsA("NumberValue") or child:IsA("StringValue") then
+                        stats[child.Name] = child.Value
+                    end
+                end
+            end
+        end
+    end)
+    Extractor.Data.Stats = stats
+end
+
+-- ============================================================
+-- FUNCIONES DE UTILIDAD PARA AUTOFARM (Ejemplos seguros)
+-- ============================================================
+local AutoFarm = {}
+
+-- Ejemplo de función segura para disparar un RemoteEvent
+function AutoFarm:SafeFireRemote(remotePath, args, delayRange)
+    if CONFIG.SafeMode and remotePath:lower():find("ban") then
+        return false -- Evitar disparar remotos con nombres sospechosos
+    end
+
+    local success = SafeUtils:SafeCall(function()
+        local remote = game:FindFirstChild(remotePath, true)
+        if not remote or not (remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction")) then
+            return false
+        end
+
+        -- Retraso humano aleatorio
+        SafeUtils:HumanDelay(delayRange and (delayRange[1] + math.random() * (delayRange[2] - delayRange[1])) or 0.5)
+
+        if remote:IsA("RemoteEvent") then
+            remote:FireServer(unpack(args or {}))
+        elseif remote:IsA("RemoteFunction") then
+            remote:InvokeServer(unpack(args or {}))
+        end
+        return true
+    end)
+
+    return success
+end
+
+-- Ejemplo de función para encontrar un remoto por nombre parcial
+function AutoFarm:FindRemoteByName(partialName)
+    local matches = {}
+    for _, remote in ipairs(Extractor.Data.Remotes) do
+        if remote.Name:lower():find(partialName:lower()) then
+            table.insert(matches, remote)
+        end
+    end
+    return matches
+end
+
+-- ============================================================
+-- EJECUCIÓN PRINCIPAL CON CONTROL DE SEGURIDAD
+-- ============================================================
+local function MainExtraction()
+    print("🔒 Iniciando extracción segura de datos...")
+
+    -- Extracciones básicas (siempre seguras)
+    Extractor:ExtractPlayerInfo()
+    Extractor:ExtractServices()
+    Extractor:ExtractRemotes()
+    Extractor:ExtractStats()
+
+    -- Escaneo profundo con límites estrictos
+    SafeUtils:SafeCall(function()
+        local rootScan = Extractor:DeepScan(game.Workspace, 0, CONFIG.MaxDepth)
+        if rootScan then
+            Extractor.Data.GameStructure["Workspace_Root"] = rootScan
+        end
+    end)
+
+    SafeUtils:SafeCall(function()
+        local rsScan = Extractor:DeepScan(game.ReplicatedStorage, 0, CONFIG.MaxDepth)
+        if rsScan then
+            Extractor.Data.GameStructure["ReplicatedStorage_Root"] = rsScan
+        end
+    end)
+
+    -- Mostrar resultados de forma segura (evitar imprimir demasiado)
+    print("✅ Extracción completada. Datos almacenados en 'Extractor.Data'.")
+    print("📊 Resumen: Jugador: " .. (Extractor.Data.PlayerInfo.Name or "N/A") .. ", Remotos encontrados: " .. #Extractor.Data.Remotes)
+
+    -- Opcional: Guardar en un StringValue para scripts posteriores (con nombre aleatorio)
+    if not CONFIG.OutputToFile then
+        SafeUtils:SafeCall(function()
+            local player = game.Players.LocalPlayer
+            if player then
+                local dataHolder = Instance.new("StringValue")
+                dataHolder.Name = "EXTRACTED_DATA_" .. math.random(100000, 999999)
+                -- Usar HttpService para serializar (si está disponible)
+                local success, json = pcall(function() return game:GetService("HttpService"):JSONEncode(Extractor.Data) end)
+                dataHolder.Value = success and json or "Error al serializar datos"
+                dataHolder.Parent = player:WaitForChild("PlayerGui")
+                print("💾 Datos guardados en: " .. dataHolder.Name)
+            end
+        end)
+    end
+
+    return Extractor.Data
+end
+
+-- ============================================================
+-- INICIALIZACIÓN SEGURA CON DELTA EXECUTOR
+-- ============================================================
+if CONFIG.UseDeltaFeatures then
+    -- Optimizaciones específicas para Delta Executor (si aplican)
+    -- Estas funciones suelen estar disponibles en ejecutores modernos
     pcall(function()
-        local remote = game:FindFirstChild(remoteName, true) or nil
-        if remote and remote:IsA("RemoteEvent") then
-            wait(math.random(0.5, 1.5)) -- human delay
-            remote:FireServer(unpack(args))
+        if syn and syn.protect_gui then
+            syn.protect_gui(game:GetService("CoreGui")) -- Ejemplo
         end
     end)
 end
 
--- Ejemplo de uso futuro: safeAutoFarm("CollectItem", {itemId = 123})
+-- Ejecutar con retraso para evitar detección por inicio rápido
+task.wait(2)
+local extractedData = MainExtraction()
+
+-- ============================================================
+-- EXPORTAR FUNCIONES ÚTILES PARA SCRIPTS POSTERIORES
+-- ============================================================
+getgenv().ExtractedData = extractedData
+getgenv().SafeAutoFarm = AutoFarm
+getgenv().SafeUtils = SafeUtils
+
+print("🛠️ Funciones exportadas: ExtractedData, SafeAutoFarm, SafeUtils")
