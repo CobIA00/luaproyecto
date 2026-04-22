@@ -1,46 +1,63 @@
---[ TOTAL CLIENT EXTRACTOR ULTIMATE ]--
--- Extrae TODO lo accesible por el cliente, incluyendo código fuente.
+--[ TOTAL CLIENT EXTRACTOR ULTIMATE v3.0 ]--
+-- 修复光照错误，新增 CoreGui / 内存模块 / 物理碰撞 / 导出文件
 
 local CONFIG = {
     MaxDepth = 5,
-    ExtractSource = true,        -- Extraer código de LocalScript/ModuleScript
-    ExtractPhysics = true,       -- Extraer configuración de físicas
-    ScanAllServices = true,      -- Escanear TODOS los servicios
+    ExtractSource = true,            -- 提取脚本源码
+    ExtractCoreGui = true,           -- 提取 CoreGui 内容（可能含反作弊UI）
+    ExtractLoadedModules = true,     -- 提取所有已加载模块源码（需 getloadedmodules）
+    ExtractGCTable = true,           -- 提取全局表信息（需 getgc）
+    ExtractPhysicsDetails = true,    -- 提取 Workspace 内所有部件的碰撞属性
+    WriteToFile = true,              -- 保存为文件（需 writefile 支持）
     OutputJSON = true
 }
 
--- ==================== 工具函数 ====================
+-- ==================== 安全工具 ====================
 local Safe = {}
-function Safe:pcall(...) local s,r = pcall(...) return s,r end
-function Safe:serialize(v)
+function Safe:pcall(...)
+    local s, r = pcall(...)
+    return s, r
+end
+function Safe:serialize(v, depth)
+    depth = depth or 0
+    if depth > 5 then return "[MaxDepth]" end
     local t = type(v)
-    if t == "string" or t == "number" or t == "boolean" then return v
+    if t == "string" or t == "number" or t == "boolean" then
+        return v
     elseif t == "table" then
         local out = {}
-        for k,val in pairs(v) do out[tostring(k)] = Safe:serialize(val) end
+        for k, val in pairs(v) do
+            out[tostring(k)] = Safe:serialize(val, depth + 1)
+        end
         return out
-    else return tostring(v) end
+    elseif t == "userdata" or t == "function" then
+        return tostring(v)
+    else
+        return nil
+    end
 end
 
--- 获取源码（需 Delta 环境支持 getsource 或 getscriptclosure）
+-- 获取源码（适配 Delta）
 function Safe:getScriptSource(scriptObj)
     if not CONFIG.ExtractSource then return nil end
-    local source = nil
+    local src = nil
     Safe:pcall(function()
-        if getscriptclosure and type(getscriptclosure) == "function" then
-            -- 某些执行器提供此函数
+        if getsource then src = getsource(scriptObj)
+        elseif getscriptclosure then
             local f = getscriptclosure(scriptObj)
-            source = debug and debug.getinfo and debug.getinfo(f) and debug.getinfo(f).source
-        elseif getsource and type(getsource) == "function" then
-            source = getsource(scriptObj)
-        elseif scriptObj.Source then
-            source = scriptObj.Source
+            if debug and debug.getinfo then
+                src = debug.getinfo(f, "S").source
+            end
+        elseif scriptObj.Source then src = scriptObj.Source
         end
     end)
-    return source
+    return src
 end
 
 -- ==================== 主提取器 ====================
+local player = game.Players.LocalPlayer
+repeat task.wait() until player and player.Character
+
 local Extractor = { Data = {} }
 
 -- 1. 元信息
@@ -49,13 +66,11 @@ Extractor.Data.Meta = {
     PlaceId = game.PlaceId,
     JobId = game.JobId,
     Timestamp = os.time(),
-    PlayerCount = #game.Players:GetPlayers()
+    PlayerCount = #game.Players:GetPlayers(),
+    Executor = identifyexecutor and identifyexecutor() or "Delta"
 }
 
--- 2. 玩家完整数据（增强版）
-local player = game.Players.LocalPlayer
-repeat task.wait() until player and player.Character
-
+-- 2. 玩家详细数据（强化）
 local playerData = {
     UserId = player.UserId,
     Name = player.Name,
@@ -68,20 +83,17 @@ local playerData = {
     Values = {}
 }
 
--- 玩家下的所有 Value 对象
 for _, v in ipairs(player:GetChildren()) do
     if v:IsA("ValueBase") then
         playerData.Values[v.Name] = Safe:serialize(v.Value)
     end
 end
 
--- Backpack 工具
 local bp = player:FindFirstChild("Backpack")
 if bp then for _, tool in ipairs(bp:GetChildren()) do
     if tool:IsA("Tool") then table.insert(playerData.Backpack, tool.Name) end
 end end
 
--- PlayerGui 界面
 local pg = player:FindFirstChild("PlayerGui")
 if pg then for _, gui in ipairs(pg:GetChildren()) do
     if gui:IsA("ScreenGui") then
@@ -94,12 +106,11 @@ local ps = player:FindFirstChild("PlayerScripts")
 if ps and CONFIG.ExtractSource then
     for _, scriptObj in ipairs(ps:GetDescendants()) do
         if scriptObj:IsA("LocalScript") or scriptObj:IsA("ModuleScript") then
-            local src = Safe:getScriptSource(scriptObj)
             table.insert(playerData.PlayerScripts, {
                 Name = scriptObj.Name,
                 Class = scriptObj.ClassName,
                 Path = scriptObj:GetFullName(),
-                Source = src
+                Source = Safe:getScriptSource(scriptObj)
             })
         end
     end
@@ -107,7 +118,7 @@ end
 
 Extractor.Data.Player = playerData
 
--- 3. 远程事件（含源码中的参数猜测）
+-- 3. 远程事件
 local remotes = {}
 for _, obj in ipairs(game:GetDescendants()) do
     if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") or obj:IsA("BindableEvent") then
@@ -121,7 +132,24 @@ for _, obj in ipairs(game:GetDescendants()) do
 end
 Extractor.Data.Remotes = remotes
 
--- 4. 所有服务扫描（深度可调）
+-- 4. 光照设置（修正：全部从 Lighting 获取）
+Extractor.Data.Lighting = {}
+Safe:pcall(function()
+    local L = game:GetService("Lighting")
+    Extractor.Data.Lighting = {
+        Ambient = L.Ambient,
+        Brightness = L.Brightness,
+        ClockTime = L.ClockTime,
+        ExposureCompensation = L.ExposureCompensation,
+        FogEnd = L.FogEnd,
+        FogStart = L.FogStart,
+        OutdoorAmbient = L.OutdoorAmbient,
+        TimeOfDay = L.TimeOfDay,
+        GeographicLatitude = L.GeographicLatitude
+    }
+end)
+
+-- 5. 服务结构扫描（增强）
 local services = {}
 local allServices = {
     "Workspace", "ReplicatedStorage", "ReplicatedFirst", "Players",
@@ -130,47 +158,89 @@ local allServices = {
     "ContextActionService", "TweenService", "MarketplaceService",
     "TeleportService", "RunService", "HttpService", "Chat", "LocalizationService"
 }
+
+local function deepScan(obj, depth)
+    if depth > CONFIG.MaxDepth then return nil end
+    local node = {Name=obj.Name, Class=obj.ClassName, Children={}}
+    if obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript") then
+        node.Source = Safe:getScriptSource(obj)
+    end
+    -- 物理属性（仅对 BasePart）
+    if CONFIG.ExtractPhysicsDetails and obj:IsA("BasePart") then
+        node.Physics = {
+            CanCollide = obj.CanCollide,
+            Massless = obj.Massless,
+            CollisionGroupId = obj.CollisionGroupId,
+            Transparency = obj.Transparency,
+            Anchored = obj.Anchored
+        }
+    end
+    for _, child in ipairs(obj:GetChildren()) do
+        local c = deepScan(child, depth+1)
+        if c then table.insert(node.Children, c) end
+    end
+    return node
+end
+
 for _, sName in ipairs(allServices) do
     Safe:pcall(function()
         local srv = game:GetService(sName)
         if srv then
-            local function scan(obj, depth)
-                if depth > CONFIG.MaxDepth then return nil end
-                local node = {Name=obj.Name, Class=obj.ClassName, Children={}}
-                if obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript") then
-                    node.Source = Safe:getScriptSource(obj)
-                end
-                for _, child in ipairs(obj:GetChildren()) do
-                    local c = scan(child, depth+1)
-                    if c then table.insert(node.Children, c) end
-                end
-                return node
-            end
-            services[sName] = scan(srv, 0)
+            services[sName] = deepScan(srv, 0)
         end
     end)
 end
 Extractor.Data.Services = services
 
--- 5. 物理设置（碰撞组、重力等）
-if CONFIG.ExtractPhysics then
-    local physData = {}
+-- 6. CoreGui 提取（需保护）
+if CONFIG.ExtractCoreGui then
     Safe:pcall(function()
-        local ps = game:GetService("PhysicsService")
-        physData.Gravity = workspace.Gravity
-        physData.CollisionGroups = {}
-        -- 尝试列出所有碰撞组（可能不存在此方法）
-        for i=0,31 do
-            local name = ps:GetCollisionGroupName(i)
-            if name ~= "" then
-                table.insert(physData.CollisionGroups, {Index=i, Name=name})
+        local coreGui = game:GetService("CoreGui")
+        Extractor.Data.CoreGui = deepScan(coreGui, 0)
+    end)
+end
+
+-- 7. 已加载模块（需 getloadedmodules）
+if CONFIG.ExtractLoadedModules then
+    Extractor.Data.LoadedModules = {}
+    Safe:pcall(function()
+        if getloadedmodules then
+            local modules = getloadedmodules()
+            for _, mod in ipairs(modules) do
+                table.insert(Extractor.Data.LoadedModules, {
+                    Name = mod.Name,
+                    Source = Safe:getScriptSource(mod)
+                })
             end
         end
     end)
-    Extractor.Data.Physics = physData
 end
 
--- 6. 音效列表（用于事件检测）
+-- 8. 全局表（需 getgc）
+if CONFIG.ExtractGCTable then
+    Extractor.Data.GlobalTables = {}
+    Safe:pcall(function()
+        if getgc then
+            local gc = getgc()
+            for _, obj in ipairs(gc) do
+                if type(obj) == "table" then
+                    local summary = {}
+                    for k, v in pairs(obj) do
+                        if type(v) ~= "function" then
+                            summary[tostring(k)] = Safe:serialize(v, 2)
+                        else
+                            summary[tostring(k)] = "[Function]"
+                        end
+                        if #summary > 10 then break end
+                    end
+                    table.insert(Extractor.Data.GlobalTables, summary)
+                end
+            end
+        end
+    end)
+end
+
+-- 9. 音效列表
 local sounds = {}
 for _, obj in ipairs(workspace:GetDescendants()) do
     if obj:IsA("Sound") then
@@ -179,17 +249,7 @@ for _, obj in ipairs(workspace:GetDescendants()) do
 end
 Extractor.Data.Sounds = sounds
 
--- 7. 照明设置（夜视相关）
-Extractor.Data.Lighting = {
-    Ambient = workspace.Ambient,
-    Brightness = game.Lighting.Brightness,
-    ClockTime = game.Lighting.ClockTime,
-    ExposureCompensation = game.Lighting.ExposureCompensation,
-    FogEnd = game.Lighting.FogEnd,
-    FogStart = game.Lighting.FogStart
-}
-
--- 8. 可能的漏洞标记（简单启发式）
+-- 10. 漏洞启发
 local vulns = {}
 for _, remote in ipairs(remotes) do
     if remote.Path:find("ReplicatedStorage") and not remote.Name:lower():match("ban") then
@@ -198,18 +258,33 @@ for _, remote in ipairs(remotes) do
 end
 Extractor.Data.PotentialVulnerabilities = vulns
 
--- ==================== 完成并保存 ====================
+-- ==================== 输出与保存 ====================
 getgenv().TotalExtractedData = Extractor.Data
-print("✅ 全量数据提取完成！变量名: TotalExtractedData")
+print("✅ 深度提取完成！变量: TotalExtractedData")
 
+-- JSON 保存到 PlayerGui
 if CONFIG.OutputJSON then
     Safe:pcall(function()
         local HttpService = game:GetService("HttpService")
         local json = HttpService:JSONEncode(Safe:serialize(Extractor.Data))
         local holder = Instance.new("StringValue")
-        holder.Name = "FullData_" .. os.time()
+        holder.Name = "DeepData_" .. os.time()
         holder.Value = json
         holder.Parent = player:WaitForChild("PlayerGui")
-        print("📁 JSON 数据已保存至 PlayerGui: " .. holder.Name)
+        print("📁 JSON 已保存至 PlayerGui: " .. holder.Name)
     end)
 end
+
+-- 写入文件（需 writefile 支持）
+if CONFIG.WriteToFile then
+    Safe:pcall(function()
+        if writefile then
+            local json = game:GetService("HttpService"):JSONEncode(Safe:serialize(Extractor.Data))
+            local filename = "DeltaExtract_" .. game.PlaceId .. "_" .. os.time() .. ".json"
+            writefile(filename, json)
+            print("📄 数据已写入文件: " .. filename)
+        end
+    end)
+end
+
+print("🎯 脚本执行完毕。所有数据已就绪。")
